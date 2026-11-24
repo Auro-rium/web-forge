@@ -122,3 +122,32 @@ async def test_end_to_end_learn_then_reuse(base_url, br, tmp_path):
     assert out.startswith("OK")
     assert out.count("title") == 3 and "Lonely Atlas" in out
     assert lib.get("list_books_in_category").uses == 1
+
+
+async def test_planner_answers_general_question_with_web_search(tmp_path):
+    """General questions (weather, news, recommendations) go to Backboard's web search, not the browser."""
+    events = []
+    llm = ScriptedMock({
+        "planner": [
+            {"tool_calls": [{"name": "web_search", "args": {"query": "weather in London today"}}]},
+            lambda **kw: {"tool_calls": [{"name": "final_answer",
+                                            "args": {"answer": json.loads(kw["message"])[0]["output"]}}]},
+        ],
+        "searcher": [{"text": "Overcast, 8°C. Source: https://weather.metoffice.gov.uk/"}],
+    })
+    cfg = Config(data_dir=tmp_path, runs_dir=tmp_path / "runs", ledger_file=tmp_path / "spend.json")
+    r = await run_task("What's the weather in London today?", llm=llm, browser=None,
+                       library=SkillLibrary(tmp_path / "sk"), memory=LocalMemory(path=tmp_path / "m.jsonl"),
+                       cfg=cfg, learn=False, on_event=lambda k, d: events.append((k, d)))
+    assert r.ok and "8°C" in r.answer and "metoffice" in r.answer
+    assert r.steps == 0                                   # no browser actions were needed
+    assert ("search", {"query": "weather in London today"}) in events
+
+
+def test_reflector_drops_transient_network_lessons():
+    from webforge.agent.reflector import is_transient
+    assert is_transient("python.org may be unreachable from some browsers")
+    assert is_transient("Direct goto to Met Office failed with net::ERR_TUNNEL_CONNECTION_FAILED")
+    assert is_transient("Direct navigation to Best Buy search URLs failed; use web search")
+    assert not is_transient("Use the Wikipedia infobox 'Stable release' field for the latest version")
+    assert not is_transient("Books are listed as article.product_pod; price in .price_color")

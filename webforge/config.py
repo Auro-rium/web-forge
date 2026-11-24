@@ -30,10 +30,9 @@ class Config:
     planner_max_steps: int = int(os.getenv("WEBFORGE_PLANNER_STEPS", "30"))
     chromium_path: str = field(default_factory=lambda: os.getenv(
         "WEBFORGE_CHROMIUM", "/opt/pw-browsers/chromium" if Path("/opt/pw-browsers/chromium").exists() else ""))
+    # empty list = any public website ("*" or unset). Set a comma list to restrict browsing to those domains.
     allowed_domains: list[str] = field(default_factory=lambda: [d.strip() for d in os.getenv(
-        "WEBFORGE_ALLOWED_DOMAINS",
-        "books.toscrape.com,quotes.toscrape.com,en.wikipedia.org,news.ycombinator.com,github.com,localhost,127.0.0.1",
-    ).split(",") if d.strip()])
+        "WEBFORGE_ALLOWED_DOMAINS", "*").split(",") if d.strip() and d.strip() != "*"])
 
     @property
     def skills_dir(self) -> Path:

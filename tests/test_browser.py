@@ -104,3 +104,18 @@ async def test_domain_blocked(base_url):
         assert (await b.act("goto", url=base_url + "/index.html")).ok  # localhost always allowed
     finally:
         await b.close()
+
+
+async def test_extract_survives_bad_field_selector(br, base_url):
+    # one malformed field selector from the model must not fail the whole extraction
+    await br.act("goto", url=base_url + "/catalogue/category/poetry/index.html")
+    r = await br.act("extract", css="article.product_pod", fields={"title": "h3 a@title", "bad": "p[[["})
+    assert r.ok, r.message
+    assert len(r.data) == 4 and r.data[0]["title"] and r.data[0]["bad"] is None
+    assert "bad" in r.message  # the model is told which field selector was invalid
+
+
+async def test_extract_invalid_row_selector_is_explained(br, base_url):
+    await br.act("goto", url=base_url + "/catalogue/category/poetry/index.html")
+    r = await br.act("extract", css="article[[[")
+    assert not r.ok and "invalid css selector" in r.message.lower()

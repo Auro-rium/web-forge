@@ -28,6 +28,16 @@ def _parse(text: str) -> list[dict]:
     return []
 
 
+# Lessons about connectivity are environment-specific (proxy, firewall, outage), not facts about the site.
+_TRANSIENT = re.compile(r"unreachable|ERR_[A-Z_]+|net::|tunnel|timed? ?out|connection (?:failed|refused|reset)|"
+                        r"could not (?:be )?(?:reach|load|connect)|failed to (?:load|connect|navigate)|"
+                        r"navigation (?:to .{0,60})?failed|blocked in this|network error", re.I)
+
+
+def is_transient(text: str) -> bool:
+    return bool(_TRANSIENT.search(text or ""))
+
+
 async def reflect(task: str, result_summary: str, ok: bool, trace_digest: str, llm, memory,
                   on_event: Optional[Callable] = None) -> list[str]:
     """Store 1-3 lessons in memory. Never raises. Returns the stored lesson texts."""
@@ -40,7 +50,7 @@ async def reflect(task: str, result_summary: str, ok: bool, trace_digest: str, l
             if isinstance(item, str):
                 item = {"text": item}
             text = str(item.get("text", "")).strip()
-            if not text:
+            if not text or is_transient(text):
                 continue
             domain = str(item.get("domain", "") or "")
             await memory.add(text, {"domain": domain, "kind": "lesson" if ok else "failure", "task": task})

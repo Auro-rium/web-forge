@@ -416,15 +416,27 @@ async def spend() -> dict:
     return {"spend_usd": s, "budget_usd": cfg.budget_usd, "remaining_usd": round(max(cfg.budget_usd - s, 0), 6)}
 
 
+# everyday tasks verified live (see docs/DEMO.md); shown before the benchmark tasks
+EVERYDAY_TASKS = [
+    {"id": "weather_london", "family": "everyday", "prompt": "What's the weather in London today?"},
+    {"id": "weather_paris", "family": "everyday", "prompt": "What is the weather in Paris right now?"},
+    {"id": "hn_top3", "family": "everyday", "prompt": "What are the top 3 stories on Hacker News right now?"},
+    {"id": "uk_pm", "family": "everyday", "prompt": "Who is the current prime minister of the UK?"},
+    {"id": "student_laptops", "family": "everyday",
+     "prompt": "Recommend 3 good laptops for students under 1000 dollars"},
+]
+
+
 @app.get("/api/tasks")
 async def tasks() -> dict:
     try:
         import yaml
         data = yaml.safe_load((ROOT / "bench" / "tasks.yaml").read_text(encoding="utf-8"))
         items = data["tasks"] if isinstance(data, dict) else data
-        return {"tasks": [{"id": t["id"], "family": t.get("family", ""), "prompt": t["prompt"]} for t in items]}
+        bench = [{"id": t["id"], "family": t.get("family", ""), "prompt": t["prompt"]} for t in items]
     except Exception:
-        return {"tasks": []}
+        bench = []
+    return {"tasks": EVERYDAY_TASKS + bench}
 
 
 @app.post("/api/run")

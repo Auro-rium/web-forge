@@ -61,6 +61,21 @@ Show benchmark results. Be precise about what they are:
 - The gain is concentrated in the Books family (Quotes and Wikipedia tasks take about 1 step either way, so there is nothing to learn). With n=1 per task, the single cold failure may be noise.
 - Repeat benchmark (3 runs per task, 27 per mode): correct 24/27 cold vs 27/27 learned; mean steps 2.85 vs 2.04; mean seconds 15.5 vs 12.0. Again the gain is in Books (all 3 cold failures were `books_mystery`); Quotes and Wikipedia show no real gain. Full table in the README.
 
+### Beat 5b (optional): audience questions (about 15 s each)
+
+Let the audience type everyday tasks. Verified live with Haiku (time / browser steps):
+
+| Task | Route | Result |
+|---|---|---|
+| What's the weather in London today? | wttr.in, builds `read_current_weather_wttr` | 13 s, 1 step |
+| What is the weather in Paris right now? (after London) | reuses that skill, no browsing LLM | 10 s |
+| Who is the current prime minister of the UK? | web_search | about 13 s, 0 steps |
+| Recommend 3 good laptops for students under 1000 dollars | web_search (twice) | about 33 s, 0 steps |
+| What are the top 3 stories on Hacker News right now? | HN skill | about 14 s |
+| What is the price of 'A Light in the Attic' on books.toscrape.com? | browse | about 21 s, 2 steps |
+
+The weather pair is the strongest self-improvement moment: the second city runs on the skill learned from the first. Sites with heavy bot protection (Google, Amazon, Best Buy) may refuse the browser; the agent falls back to web search.
+
 ### Beat 6 (optional): long-horizon finale (about 50 s)
 
 > On https://news.ycombinator.com find the top 3 stories on the front page. For each story: open its comments page, then record its title, points, number of comments, and the first sentence of the top comment. Save your findings for each story as you go using write_file, then write a final report.md that summarizes all three stories and compares them, and give me the full report as your final answer
@@ -71,7 +86,7 @@ Close with the cost line: "The whole project, including all benchmarks, has spen
 
 ## Honest caveats to say out loud
 
-- Haiku sometimes answers in prose instead of calling a tool; the planner nudges it (up to 3 times in a row). You may see a "nudge" warning in the timeline. That is expected behaviour, not a crash.
+- Haiku sometimes answers in prose instead of calling a tool; the planner nudges it (up to 3 times in a row). You may see a dim "nudge" line in the timeline. That is expected behaviour, not a crash.
 - Live runs vary in steps and seconds. If a number differs from the slide, that is normal.
 - Learning only helps repeated *kinds* of task; one-off tasks cost the same as before, plus the small cost of building a skill.
 

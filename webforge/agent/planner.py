@@ -131,6 +131,15 @@ async def run_task(task: str, *, llm, browser, library, memory, cfg, on_event: O
         digest.append(f"skill {name}({params}) FAILED: {res.message}")
         return _clip(f"FAILED: {res.message}. Fall back to delegate_browse.")
 
+    async def t_web_search(a: dict) -> str:
+        q = str(a.get("query", "")).strip()
+        if not q:
+            return "ERROR: query is required"
+        emit("search", {"query": q})
+        r = await llm.web_search(q)
+        digest.append(f"web_search '{q}' -> {(r.text or '')[:200]}")
+        return _clip(r.text or "(no results)")
+
     def t_todos(a: dict) -> str:
         todos[:] = a.get("todos") or []
         emit("todos", {"todos": todos})
@@ -164,7 +173,7 @@ async def run_task(task: str, *, llm, browser, library, memory, cfg, on_event: O
     if mem_text:
         emit("memory_hits", {"text": mem_text})
     first = (f"TASK: {task}\n\nToday: {date.today().isoformat()}. "
-             f"Allowed domains: {', '.join(cfg.allowed_domains)}. Max {cfg.planner_max_steps} tool rounds.\n\n"
+             f"Allowed domains: {', '.join(cfg.allowed_domains) or 'any public website'}. Max {cfg.planner_max_steps} tool rounds.\n\n"
              f"AVAILABLE SKILLS:\n{catalog or '(none)'}\n\n"
              f"MEMORY (lessons from earlier runs):\n{mem_text or '(none)'}")
     tools = [t for t in PLANNER_TOOLS if use_skills or t["function"]["name"] not in ("run_skill", "list_skills")]
@@ -183,11 +192,11 @@ async def run_task(task: str, *, llm, browser, library, memory, cfg, on_event: O
                 if nudges >= 3:
                     break
                 nudges += 1
-                emit("warn", {"message": f"planner replied without a tool call; nudge {nudges}/3"})
+                emit("nudge", {"message": f"planner thought in prose; asking it to act ({nudges}/3)"})
                 reply = await llm.chat(
                     role="planner", thread_id=thread, system=PLANNER_SYSTEM, tools=tools,
                     message="You have not finished. Do not describe plans in prose. Call a tool NOW: "
-                            "delegate_browse(subtask, start_url) to do browsing, run_skill if a skill fits, "
+                            "web_search(query) for general questions, delegate_browse(subtask, start_url) to do browsing, run_skill if a skill fits, "
                             "or final_answer(answer) with the actual requested data once you have it.")
                 last_text = reply.text or last_text
                 continue
@@ -211,6 +220,8 @@ async def run_task(task: str, *, llm, browser, library, memory, cfg, on_event: O
                         out = t_list_skills(a)
                     elif tc.name == "run_skill":
                         out = await t_run_skill(a)
+                    elif tc.name == "web_search":
+                        out = await t_web_search(a)
                     elif tc.name == "delegate_browse":
                         out = await t_delegate(a)
                     else:

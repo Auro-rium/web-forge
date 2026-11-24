@@ -94,3 +94,12 @@ async def test_budget_cap_blocks_calls(tmp_path):
     llm = BackboardLLM(cfg)
     with pytest.raises(BudgetExceeded):
         await llm.chat(role="planner", message="hi", system="s")
+
+
+def test_allowed_domains_default_is_open_web(monkeypatch):
+    monkeypatch.delenv("WEBFORGE_ALLOWED_DOMAINS", raising=False)
+    assert Config().allowed_domains == []          # empty list = any public website
+    monkeypatch.setenv("WEBFORGE_ALLOWED_DOMAINS", "*")
+    assert Config().allowed_domains == []
+    monkeypatch.setenv("WEBFORGE_ALLOWED_DOMAINS", "a.com, b.org")
+    assert Config().allowed_domains == ["a.com", "b.org"]

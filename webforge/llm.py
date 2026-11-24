@@ -121,6 +121,10 @@ def _ledger_add(cfg: Config, cost: float) -> float:
         return ledger_total(cfg) + cost
 
 
+SEARCH_SYSTEM = ("Search the web and answer the question concisely with concrete facts (numbers, names, dates). "
+                 "Cite 1-3 source URLs. If results disagree or are uncertain, say so briefly.")
+
+
 class BackboardLLM:
     """Real LLM via Backboard. One assistant per role, ids cached in cfg.state_file."""
 
@@ -219,6 +223,14 @@ class BackboardLLM:
             reply.thread_id = thread_id
         return reply
 
+    async def web_search(self, query: str) -> LLMReply:
+        """One-shot answer grounded by Backboard's built-in web search (no browser needed)."""
+        self._guard()
+        aid = await self._assistant_id("searcher")
+        resp = await _retry(self.client.send_message, query, assistant_id=aid, llm_provider=self.cfg.provider,
+                            model_name=self.cfg.model, system_prompt=SEARCH_SYSTEM, memory=None, web_search="Auto")
+        return self._account(resp)
+
     def usage(self) -> dict:
         return {"calls": self.calls, "tokens": self.total_tokens, "cost_usd": self.total_cost}
 
@@ -306,6 +318,9 @@ class MockLLM:
 
     async def submit(self, *, role: str, thread_id: str, outputs: list[dict]) -> LLMReply:
         return self._call("submit", role, json.dumps(outputs), thread_id, None, "")
+
+    async def web_search(self, query: str) -> LLMReply:
+        return self._call("chat", "searcher", query, None, None, "")
 
     def usage(self) -> dict:
         return {"calls": self.calls, "tokens": self.total_tokens, "cost_usd": self.total_cost}

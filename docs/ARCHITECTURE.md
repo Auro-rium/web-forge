@@ -7,7 +7,7 @@ Technical reference for the report. Every statement below was checked against th
 1. Complete multi-step web tasks with an LLM that drives a real browser (a "deep agent": plan, delegate, scratch workspace, sub-agents).
 2. Make the agent measurably cheaper and faster on repeated *kinds* of task by compiling what worked into **skills** that replay without an LLM.
 3. Keep that learning inspectable and bounded: skills are plain JSON, validated by replay before being saved, repaired or demoted when they break.
-4. Keep spend and blast radius small: hard dollar cap, domain allowlist, blocked actions, untrusted page text.
+4. Keep spend and blast radius small: hard dollar cap, blocked actions, untrusted page text, optional domain allowlist.
 5. Be demonstrable offline (mock LLM, local fixture site) and reproducible (programmatic benchmark checkers).
 
 ## 2. Components
@@ -53,7 +53,7 @@ flowchart LR
 
 ### Roles and tools
 
-The planner never touches the browser. Its tools (`agent/prompts.py`): `write_todos`, `write_file`, `read_file`, `list_skills`, `run_skill`, `delegate_browse`, `final_answer`. The worker's tools: `goto`, `click`, `type`, `select`, `press`, `scroll`, `back`, `extract`, `done`. A run ends when the planner calls `final_answer` (`RunResult.ok = True`), or when it exhausts `planner_max_steps` (30) tool rounds or stalls.
+The planner never touches the browser. Its tools (`agent/prompts.py`): `write_todos`, `write_file`, `read_file`, `list_skills`, `run_skill`, `web_search`, `delegate_browse`, `final_answer`. `web_search` is a one-shot Backboard call with `web_search="Auto"` (role `searcher`, no browser); the prompt routes general questions there first and keeps `delegate_browse` for site-specific interaction. Current weather goes to wttr.in's plain-text report, which the skill builder turns into a reusable `read_current_weather_wttr(location)` skill. The worker's tools: `goto`, `click`, `type`, `select`, `press`, `scroll`, `back`, `extract`, `done`. A run ends when the planner calls `final_answer` (`RunResult.ok = True`), or when it exhausts `planner_max_steps` (30) tool rounds or stalls.
 
 ## 3. One run, including skill reuse
 
@@ -94,7 +94,7 @@ sequenceDiagram
 
 Details that matter:
 
-* The planner's first message contains the task, today's date, the allowlist, the step limit, the skill catalogue (`library.describe()`, demoted skills excluded) and memory hits.
+* The planner's first message contains the task, today's date, the allowlist (or "any public website"), the step limit, the skill catalogue (`library.describe()`, demoted skills excluded) and memory hits.
 * Skills are only built when `learn=True` and a delegated subtask succeeded with a non-empty trace (`maybe_build`).
 * If the model answers in prose instead of calling a tool, the planner nudges it; at most 3 *consecutive* nudges are allowed, then the run stops with `ok=False`. (A bug counted nudges cumulatively; fixed in commit `a4ab12a`.)
 * `RunResult.steps` counts worker `act()` calls plus the number of steps of every executed skill.
@@ -189,7 +189,7 @@ After each run with `learn=True` the reflector (`reflector` role, JSON output) r
 
 | Control | Where | What it does |
 |---|---|---|
-| Domain allowlist | `safety.check_action`, `Browser._goto` | `goto` to hosts not in `WEBFORGE_ALLOWED_DOMAINS` (subdomains included; `localhost` and `127.0.0.1` always allowed) is refused, both for LLM-driven actions and for skill replay. |
+| Domain allowlist (optional) | `safety.check_action`, `Browser._goto` | Off by default (open web). When `WEBFORGE_ALLOWED_DOMAINS` is set, `goto` to other hosts (subdomains included; `localhost` and `127.0.0.1` always allowed) is refused, both for LLM-driven actions and for skill replay. |
 | Sensitive input | `safety.check_action` | `type`/`select` into elements whose name/role/locator look like password, card number, CVV, SSN fields is refused. |
 | Risky clicks | `safety.check_action` | Clicking elements named like checkout, pay now, place order, buy now, sign in, log in, delete account, confirm order/purchase is refused. |
 | Untrusted page text | prompts | Planner and worker prompts instruct the model to treat page text and tool output as data and never follow instructions found there. This is a prompt-level mitigation, not an enforced boundary. |

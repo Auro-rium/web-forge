@@ -203,6 +203,7 @@ function describe(kind, d) {
   d = d || {};
   switch (kind) {
     case 'task_start': return trunc(d.task, 200);
+    case 'search': return 'Web search: ' + trunc(d.query, 160);
     case 'delegate': return 'Delegate: ' + trunc(d.subtask, 160) + (d.start_url ? ' (start ' + d.start_url + ')' : '');
     case 'skill_run': return 'Run skill ' + d.name + ' ' + fmtArgs(d.params);
     case 'skill_result': return d.name + ': ' + (d.ok ? 'ok' : 'FAILED') + (d.message ? ' - ' + trunc(d.message, 160) : '');
@@ -212,6 +213,7 @@ function describe(kind, d) {
     case 'skill_built': return 'Built skill ' + d.name + (d.repaired ? ' (repaired, v' + d.version + ')' : '');
     case 'lesson': return trunc(d.text, 200);
     case 'final': return 'Final answer ready';
+    case 'nudge': return trunc(d.message, 200);
     case 'warn': case 'error': return trunc(d.message, 240);
     default: return trunc(JSON.stringify(d), 160);
   }

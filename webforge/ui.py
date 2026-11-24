@@ -14,6 +14,8 @@ from rich.text import Text
 STYLES = {
     "task_start": ("bold white", "*"),
     "delegate": ("cyan", "->"),
+    "search": ("cyan", "?"),
+    "nudge": ("dim", "…"),
     "action": ("white", ">"),
     "skill_run": ("magenta", "#"),
     "skill_result": ("magenta", "#"),
@@ -37,6 +39,8 @@ def describe_event(kind: str, data: dict) -> str:
         return _trunc(d.get("task", ""))
     if kind == "todos":
         return f"{len(d.get('todos') or [])} todos"
+    if kind == "search":
+        return f"web search: {_trunc(d.get('query', ''))}"
     if kind == "delegate":
         return f"delegate: {_trunc(d.get('subtask', ''))}"
     if kind == "skill_run":
@@ -58,6 +62,8 @@ def describe_event(kind: str, data: dict) -> str:
         return f"final: {_trunc(d.get('answer', ''))}"
     if kind == "warn":
         return f"warn: {_trunc(d.get('message', ''))}"
+    if kind == "nudge":
+        return _trunc(d.get("message", ""))
     return f"{kind} {_trunc(d)}"
 
 

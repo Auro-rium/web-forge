@@ -147,10 +147,16 @@ class Browser:
         if not css:
             t = await self.page_text(4000)
             return ActionResult(True, t[:500], t)
-        rows = await extract_rows(self.page, css, fields)
+        res = await extract_rows(self.page, css, fields)
+        if res.get("error"):
+            return ActionResult(False, res["error"], [])
+        rows = res.get("rows") or []
         if not rows:
             return ActionResult(False, f"no elements match '{css}'", [])
-        return ActionResult(True, preview(rows), rows)
+        msg = preview(rows)
+        if res.get("bad"):
+            msg = f"invalid selector for field(s) {', '.join(res['bad'])} (left empty); " + msg
+        return ActionResult(True, msg, rows)
 
     # --------------------------------------------------------- replay (skills) ---
     async def act_locator(self, action: str, locator: Optional[dict], value: Optional[str] = None,

@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import json
 from typing import Any, Optional
-from urllib.parse import urlparse
+from webforge.safety import domain_allowed  # noqa: F401  (re-exported for the browser session)
 
-ALWAYS_ALLOWED = {"localhost", "127.0.0.1"}
 
 EXTRACT_JS = r"""
 ([css, fields]) => {
@@ -15,17 +14,24 @@ EXTRACT_JS = r"""
     if (attr) return (attr === 'href' || attr === 'src') && el[attr] ? el[attr] : el.getAttribute(attr);
     return norm(el.textContent);
   };
-  return [...document.querySelectorAll(css)].map(row => {
+  let nodes;
+  try { nodes = [...document.querySelectorAll(css)]; }
+  catch (e) { return { rows: [], bad: [], error: 'invalid CSS selector: ' + css }; }
+  const bad = new Set();
+  const rows = nodes.map(row => {
     if (!fields) return norm(row.textContent);
     const out = {};
     for (const [k, spec] of Object.entries(fields)) {
-      const i = spec.lastIndexOf('@');
-      const sel = i >= 0 ? spec.slice(0, i).trim() : spec.trim();
-      const attr = i >= 0 ? spec.slice(i + 1).trim() : '';
-      out[k] = read(sel ? row.querySelector(sel) : row, attr);
+      const s = String(spec ?? '');
+      const i = s.lastIndexOf('@');
+      const sel = i >= 0 ? s.slice(0, i).trim() : s.trim();
+      const attr = i >= 0 ? s.slice(i + 1).trim() : '';
+      try { out[k] = read(sel ? row.querySelector(sel) : row, attr); }
+      catch (e) { out[k] = null; bad.add(k); }   // one malformed field must not sink the whole extraction
     }
     return out;
   });
+  return { rows, bad: [...bad], error: '' };
 }
 """
 
@@ -38,15 +44,6 @@ def short_err(e: Exception, limit: int = 200) -> str:
 def normalize_url(url: str) -> str:
     url = (url or "").strip()
     return url if "://" in url or url.startswith(("about:", "data:")) else "https://" + url
-
-
-def domain_allowed(url: str, allowed: Optional[list[str]]) -> bool:
-    if not allowed:
-        return True
-    host = (urlparse(url).hostname or "").lower()
-    if host in ALWAYS_ALLOWED:
-        return True
-    return any(host == d.lower() or host.endswith("." + d.lower()) for d in allowed)
 
 
 def locator_candidates(page, loc: dict) -> list:
@@ -78,9 +75,10 @@ async def resolve_locator(page, loc: Optional[dict]):
     return None
 
 
-async def extract_rows(page, css: Optional[str], fields: Optional[dict]) -> list:
+async def extract_rows(page, css: Optional[str], fields: Optional[dict]) -> dict:
+    """Returns {"rows": [...], "bad": [field names with invalid selectors], "error": str}."""
     if not css:
-        return []
+        return {"rows": [], "bad": [], "error": ""}
     return await page.evaluate(EXTRACT_JS, [css, fields or None])
 
 

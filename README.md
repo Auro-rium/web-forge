@@ -8,13 +8,14 @@
 
 ## What it is
 
-WebForge is a planner/worker agent that drives a real Chromium browser through Playwright, using an LLM served by [Backboard](https://backboard.io). When a browsing subtask succeeds, WebForge compiles the recorded trace into a small parameterised JSON *skill*, checks it by replaying it, and saves it; the next similar task runs that skill with no browsing LLM. A reflector also stores short lessons in memory, and a hard dollar cap plus a domain allowlist keep runs cheap and contained. It comes with a live web UI, a CLI, an offline test suite, and a cold-vs-learned benchmark.
+WebForge is a planner/worker agent that drives a real Chromium browser through Playwright, using an LLM served by [Backboard](https://backboard.io). When a browsing subtask succeeds, WebForge compiles the recorded trace into a small parameterised JSON *skill*, checks it by replaying it, and saves it; the next similar task runs that skill with no browsing LLM. General questions (news, weather, facts, recommendations) are answered through Backboard's built-in web search first, so the agent handles everyday tasks, not only site automation. A reflector also stores short lessons in memory, and a hard dollar cap plus action-level safety checks (and an optional domain allowlist) keep runs cheap and contained. It comes with a live web UI, a CLI, an offline test suite, and a cold-vs-learned benchmark.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     U["User: CLI or web UI"] --> P["Planner"]
+    P -->|web_search| WS["Backboard web search"]
     P -->|delegate_browse| W["Worker (fresh LLM thread per subtask)"]
     P -->|run_skill| R["Skill replay (no LLM)"]
     W --> B["Browser: Playwright + Chromium"]
@@ -98,7 +99,7 @@ Set via environment variables or `.env` (see [.env.example](.env.example)).
 | `WEBFORGE_PROVIDER` | `anthropic` | LLM provider routed by Backboard. |
 | `WEBFORGE_MODEL` | `claude-haiku-5-5` | Model name. |
 | `WEBFORGE_BUDGET_USD` | `3.0` | Hard cap on cumulative spend, tracked in a global ledger (`data/spend.json`). LLM calls are refused once reached. |
-| `WEBFORGE_ALLOWED_DOMAINS` | books.toscrape.com, quotes.toscrape.com, en.wikipedia.org, news.ycombinator.com, github.com, localhost, 127.0.0.1 | Comma-separated navigation allowlist (subdomains included). |
+| `WEBFORGE_ALLOWED_DOMAINS` | `*` (any public website) | Optional comma-separated navigation allowlist (subdomains included), e.g. `books.toscrape.com,en.wikipedia.org`. |
 | `WEBFORGE_CHROMIUM` | auto | Path to a Chromium binary; empty uses Playwright's own. |
 | `WEBFORGE_DATA` / `WEBFORGE_RUNS` | `./data` / `./runs` | Skills, memory, state; run artefacts and benchmark JSONL. |
 | `WEBFORGE_LEDGER` | `./data/spend.json` | Spend ledger path. |
@@ -111,7 +112,7 @@ Set via environment variables or `.env` (see [.env.example](.env.example)).
 
 ## Safety and cost controls
 
-- **Domain allowlist.** Navigation (`goto`, including inside skill replay) to hosts outside `WEBFORGE_ALLOWED_DOMAINS` is refused.
+- **Optional domain allowlist.** Browsing is open-web by default. Set `WEBFORGE_ALLOWED_DOMAINS` and navigation (`goto`, including inside skill replay) to other hosts is refused.
 - **Blocked actions.** The worker cannot type into password/card/CVV/SSN-like fields, and cannot click checkout, pay, place-order, sign-in/log-in or delete-account controls (regex heuristics on element names).
 - **Untrusted page text.** Prompts tell the model to treat page text and tool output as data and not to follow instructions in it. This is a mitigation, not a guarantee.
 - **Spend cap.** Every Backboard call checks the global ledger first and raises `BudgetExceeded` at the cap; the server also returns HTTP 402. Benchmarks use isolated data directories but share the same ledger.

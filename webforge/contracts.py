@@ -112,6 +112,7 @@ class LLM(Protocol):
                    thread_id: Optional[str] = None, json_output: bool = False) -> LLMReply: ...
     async def submit(self, *, role: str, thread_id: str, outputs: list[dict]) -> LLMReply: ...
     # outputs: [{"tool_call_id": str, "output": str}]
+    async def web_search(self, query: str) -> LLMReply: ...   # one-shot answer grounded by web search
 
 
 class Memory(Protocol):
@@ -191,5 +192,5 @@ class RunResult:
 
 # Event callback used for the live UI. Signature: on_event(kind: str, data: dict) -> None
 # kinds: "task_start", "todos" {todos}, "delegate" {subtask}, "skill_run" {name, params}, "skill_result" {name, ok, message},
-#        "observe" {url, n_elements}, "action" {action, args, ok, message}, "memory_hits" {text},
+#        "observe" {url, n_elements}, "action" {action, args, ok, message}, "memory_hits" {text}, "search" {query},
 #        "skill_built" {name}, "lesson" {text}, "final" {answer}, "warn" {message}

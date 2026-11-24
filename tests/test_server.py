@@ -53,6 +53,7 @@ def test_health_and_tasks(client, cfg):
     assert "api_key" not in json.dumps(h).lower()
     t = client.get("/api/tasks").json()["tasks"]
     assert any(x["id"] == "books_poetry" for x in t) and all(x["prompt"] for x in t)
+    assert t[0]["family"] == "everyday"
     assert client.get("/api/spend").json()["budget_usd"] == 1.0
 
 
