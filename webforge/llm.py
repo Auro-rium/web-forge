@@ -101,16 +101,26 @@ def ledger_total(cfg: Config) -> float:
 
 
 def _ledger_add(cfg: Config, cost: float) -> float:
-    total = ledger_total(cfg) + cost
+    """Atomically add cost to the global ledger (flock: parallel processes must not lose updates)."""
+    import fcntl
+    path = _ledger_path(cfg)
     try:
-        _ledger_path(cfg).parent.mkdir(parents=True, exist_ok=True)
-        _ledger_path(cfg).write_text(json.dumps({"total_usd": round(total, 6), "cap_usd": cfg.budget_usd}))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a+") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            fh.seek(0)
+            try:
+                total = float(json.loads(fh.read() or "{}").get("total_usd", 0.0))
+            except Exception:
+                total = 0.0
+            total += cost
+            fh.seek(0)
+            fh.truncate()
+            fh.write(json.dumps({"total_usd": round(total, 6), "cap_usd": cfg.budget_usd}))
+        return total
     except Exception:
-        pass
-    return total
+        return ledger_total(cfg) + cost
 
-
-# ----------------------------------------------------------- BackboardLLM ---
 
 class BackboardLLM:
     """Real LLM via Backboard. One assistant per role, ids cached in cfg.state_file."""
