@@ -54,20 +54,24 @@ Open <http://localhost:8000>, paste your [Backboard](https://backboard.io) API k
 
 - **Where the key goes.** The page sends it to your local server, which checks it with a cheap Backboard call and stores it in `data/backboard_key` (mode 0600) inside the `webforge-data` volume. It is never returned by the API. The port is published on `127.0.0.1` only, and the save-key endpoint is only enabled because compose sets `WEBFORGE_LOCAL=1`; do not publish the port on other interfaces without also setting `WEBFORGE_ACCESS_CODE`. "Forget saved key" (under Connection) deletes it.
 - **What persists.** Two named volumes: `webforge-data` (learned skills, memory mirror, spend ledger, saved key) and `webforge-runs` (run recordings). They survive `docker compose down` and restarts. Reset everything, including the spend cap ledger, with `docker compose down -v`.
-- **Headless.** Docker has no display, so the web UI runs Chromium headless there. To watch the browser window (e.g. for a live demo), run on the host instead: `python -m webforge serve --headed`.
+- **Headless.** Docker has no display, so the web UI runs Chromium headless there. To watch the browser window (e.g. for a live demo), run on the host instead (see the next section) with `python -m webforge serve --headed`.
 - **Settings.** `WEBFORGE_MODEL`, `WEBFORGE_PROVIDER` and `WEBFORGE_BUDGET_USD` pass through from your environment (defaults: `claude-haiku-5-5`, `anthropic`, `3.0`).
 - **Troubleshooting.** Port 8000 in use: change the left side of `127.0.0.1:8000:8000` in `docker-compose.yml`. Chromium crashes: keep `shm_size: 1gb`. Anything else: `docker compose logs -f` (also `make docker-up`, `make docker-down`, `make docker-logs`).
 
-## Quickstart (laptop)
+## Quickstart (laptop, without Docker)
+
+Needs Python 3.11+. On Ubuntu/Debian the command is `python3`, and the venv module is a separate package.
 
 ```bash
+sudo apt install -y python3-venv            # Ubuntu/Debian only, once
+python3 -m venv .venv
+source .venv/bin/activate                   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python -m playwright install chromium
-cp .env.example .env          # then set BACKBOARD_API_KEY in .env
-python -m webforge serve      # open http://localhost:8000
+python -m playwright install --with-deps chromium   # asks for sudo once to install browser libraries
+python -m webforge serve --headed           # then open http://localhost:8000
 ```
 
-Open http://localhost:8000 and use the web UI: pick an example task, press **Run agent**, and watch the todo list, actions, skills and metrics stream in. No further commands are needed. (The UI's browser runs headless; use the CLI with `--headed` to watch Chromium.)
+Inside the activated venv, `python` and `pip` work as written. Open http://localhost:8000, paste your Backboard key into the "Connect Backboard" card (or put it in `.env`: `cp .env.example .env`), pick an example task and press **Run agent**. `--headed` opens the real Chromium window so you can watch the agent; leave it out to run the browser invisibly. Next time you only need `source .venv/bin/activate` and the `serve` command.
 
 CLI examples:
 

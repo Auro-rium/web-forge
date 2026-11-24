@@ -5,7 +5,7 @@ Goal: show that WebForge solves a web task with an LLM, turns what worked into a
 ## Pre-flight checklist (15 minutes before)
 
 - [ ] Pick one path (never show your key on screen):
-  - **Local Python:** `.env` exists with a valid `BACKBOARD_API_KEY` (copy from `.env.example`); `pip install -r requirements.txt` and `python -m playwright install chromium` done; start with `python -m webforge serve` (add `--headed` to show the browser window).
+  - **Local Python:** `.env` exists with a valid `BACKBOARD_API_KEY` (copy from `.env.example`); venv created and active (`python3 -m venv .venv && source .venv/bin/activate`), `pip install -r requirements.txt` and `python -m playwright install --with-deps chromium` done; start with `python -m webforge serve` (add `--headed` to show the browser window).
   - **Docker:** `docker compose up --build`, open http://localhost:8000 and paste the key into the "Connect Backboard" card (or set `BACKBOARD_API_KEY` beforehand). The browser is headless in Docker, so `--headed` is only available on the host.
 - [ ] Network works; open https://books.toscrape.com in a normal browser tab to confirm the site is up.
 - [ ] Start the server: `python -m webforge serve`, open http://localhost:8000.
@@ -86,5 +86,5 @@ Close with the cost line: "The whole project, including all benchmarks, has spen
 | HTTP 402 "Budget exhausted" / `BudgetExceeded` | Ledger reached `WEBFORGE_BUDGET_USD` | Check `curl -s localhost:8000/api/spend`. Raise `WEBFORGE_BUDGET_USD` in `.env` and restart the server, only if you are sure. |
 | HTTP 409 "Another run is in progress" | A previous run is still active | Wait for it to finish (one run at a time). |
 | HTTP 401 | `WEBFORGE_ACCESS_CODE` set on the server | Enter the access code in the Connection card. |
-| `health.browser` is false | Chromium not installed | `python -m playwright install chromium`, restart. |
+| `health.browser` is false | Chromium not installed | `python -m playwright install --with-deps chromium` (inside the venv), restart. |
 | Beat 3 does not show skill reuse | Skill was not saved in beat 2 (replay validation failed) or planner chose to browse | Check the timeline for "skill not built"; run `python -m webforge skills list`. Rerun beat 2, then beat 3. |
