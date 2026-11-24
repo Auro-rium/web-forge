@@ -83,3 +83,14 @@ def test_live_tool_roundtrip(tmp_path):
         finally:
             await llm.aclose()
     run(go())
+
+
+async def test_budget_cap_blocks_calls(tmp_path):
+    import json
+    from webforge.llm import BackboardLLM, BudgetExceeded
+    cfg = Config(data_dir=tmp_path)
+    cfg.budget_usd = 1.0
+    (tmp_path / "spend.json").write_text(json.dumps({"total_usd": 1.2}))
+    llm = BackboardLLM(cfg)
+    with pytest.raises(BudgetExceeded):
+        await llm.chat(role="planner", message="hi", system="s")

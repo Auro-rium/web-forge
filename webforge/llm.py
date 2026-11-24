@@ -82,6 +82,34 @@ def _usage_from(resp: Any) -> tuple[int, float]:
         return 0, 0.0
 
 
+
+# ------------------------------------------------------------ spend cap ---
+
+class BudgetExceeded(RuntimeError):
+    """Raised before a Backboard call when cumulative spend reached the hard cap."""
+
+
+def _ledger_path(cfg: Config) -> Path:
+    return cfg.data_dir / "spend.json"
+
+
+def ledger_total(cfg: Config) -> float:
+    try:
+        return float(json.loads(_ledger_path(cfg).read_text()).get("total_usd", 0.0))
+    except Exception:
+        return 0.0
+
+
+def _ledger_add(cfg: Config, cost: float) -> float:
+    total = ledger_total(cfg) + cost
+    try:
+        _ledger_path(cfg).parent.mkdir(parents=True, exist_ok=True)
+        _ledger_path(cfg).write_text(json.dumps({"total_usd": round(total, 6), "cap_usd": cfg.budget_usd}))
+    except Exception:
+        pass
+    return total
+
+
 # ----------------------------------------------------------- BackboardLLM ---
 
 class BackboardLLM:
@@ -134,11 +162,17 @@ class BackboardLLM:
             self._ids[role] = aid
             return aid
 
+    def _guard(self) -> None:
+        spent = ledger_total(self.cfg)
+        if spent >= self.cfg.budget_usd:
+            raise BudgetExceeded(f"Backboard spend cap reached: ${spent:.3f} >= ${self.cfg.budget_usd:.2f}")
+
     def _account(self, resp: Any) -> LLMReply:
         tokens, cost = _usage_from(resp)
         self.calls += 1
         self.total_tokens += tokens
         self.total_cost += cost
+        _ledger_add(self.cfg, cost)
         status = str(getattr(resp, "status", "") or "")
         # QUIRK: COMPLETED responses after submit still echo the old tool_calls; trust status.
         tcs = _tool_calls(resp) if status in ("", "REQUIRES_ACTION") else []
@@ -152,6 +186,7 @@ class BackboardLLM:
 
     async def chat(self, *, role: str, message: str, system: str, tools: Optional[list[dict]] = None,
                    thread_id: Optional[str] = None, json_output: bool = False) -> LLMReply:
+        self._guard()
         aid = await self._assistant_id(role)
         if thread_id is not None and not system:
             system = self._systems.get(thread_id, "")
@@ -167,6 +202,7 @@ class BackboardLLM:
         return reply
 
     async def submit(self, *, role: str, thread_id: str, outputs: list[dict]) -> LLMReply:
+        self._guard()
         outs = [{"tool_call_id": str(o["tool_call_id"]), "output": str(o.get("output", ""))} for o in outputs]
         resp = await _retry(self.client.submit_tool_outputs_simple, thread_id, outs)
         reply = self._account(resp)

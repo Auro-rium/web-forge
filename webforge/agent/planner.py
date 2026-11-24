@@ -176,7 +176,21 @@ async def run_task(task: str, *, llm, browser, library, memory, cfg, on_event: O
         thread = reply.thread_id
         rounds = 0
         last_text = reply.text or ""
-        while reply.status == "REQUIRES_ACTION" and reply.tool_calls and rounds < cfg.planner_max_steps:
+        nudges = 0
+        while rounds < cfg.planner_max_steps:
+            if not (reply.status == "REQUIRES_ACTION" and reply.tool_calls):
+                # model answered in prose without finishing: push it to act (live models do this often)
+                if nudges >= 3:
+                    break
+                nudges += 1
+                emit("warn", {"message": f"planner replied without a tool call; nudge {nudges}/3"})
+                reply = await llm.chat(
+                    role="planner", thread_id=thread, system=PLANNER_SYSTEM, tools=tools,
+                    message="You have not finished. Do not describe plans in prose. Call a tool NOW: "
+                            "delegate_browse(subtask, start_url) to do browsing, run_skill if a skill fits, "
+                            "or final_answer(answer) with the actual requested data once you have it.")
+                last_text = reply.text or last_text
+                continue
             rounds += 1
             outputs, finished = [], False
             for tc in reply.tool_calls:

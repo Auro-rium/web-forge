@@ -18,10 +18,12 @@ ROOT = Path(__file__).resolve().parent.parent
 class Config:
     api_key: str = field(default_factory=lambda: os.getenv("BACKBOARD_API_KEY", ""))
     base_url: str = field(default_factory=lambda: os.getenv("BACKBOARD_BASE_URL", "https://app.backboard.io/api"))
-    provider: str = field(default_factory=lambda: os.getenv("WEBFORGE_PROVIDER", "openai"))
-    model: str = field(default_factory=lambda: os.getenv("WEBFORGE_MODEL", "gpt-4.1-mini"))
+    provider: str = field(default_factory=lambda: os.getenv("WEBFORGE_PROVIDER", "anthropic"))
+    model: str = field(default_factory=lambda: os.getenv("WEBFORGE_MODEL", "claude-haiku-5-5"))
     data_dir: Path = field(default_factory=lambda: Path(os.getenv("WEBFORGE_DATA", ROOT / "data")))
     runs_dir: Path = field(default_factory=lambda: Path(os.getenv("WEBFORGE_RUNS", ROOT / "runs")))
+    # hard cap on cumulative Backboard spend (persisted in data/spend.json); cheap model by default
+    budget_usd: float = float(os.getenv("WEBFORGE_BUDGET_USD", "3.0"))
     worker_max_steps: int = int(os.getenv("WEBFORGE_WORKER_STEPS", "25"))
     planner_max_steps: int = int(os.getenv("WEBFORGE_PLANNER_STEPS", "30"))
     headless: bool = os.getenv("WEBFORGE_HEADED", "0") != "1"
