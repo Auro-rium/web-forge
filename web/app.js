@@ -298,6 +298,8 @@ const Live = {
   },
   finish(result, status, error) {
     this.stopClock();
+    const td = $('#todos');
+    if (td.children.length === 1 && td.firstChild.classList.contains('muted')) td.firstChild.textContent = 'No plan needed: the agent answered directly.';
     this.status(status === 'done' ? 'done' : 'error');
     if (result) {
       this.renderMetrics(result);
