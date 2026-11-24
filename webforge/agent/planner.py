@@ -192,6 +192,7 @@ async def run_task(task: str, *, llm, browser, library, memory, cfg, on_event: O
                 last_text = reply.text or last_text
                 continue
             rounds += 1
+            nudges = 0  # only CONSECUTIVE prose replies count as a stall
             outputs, finished = [], False
             for tc in reply.tool_calls:
                 a = tc.args or {}
