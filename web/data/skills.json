@@ -1,0 +1,135 @@
+{
+ "skills": [
+  {
+   "name": "extract_category_books_sorted_by_price",
+   "domain": "books.toscrape.com",
+   "description": "Opens a books.toscrape.com category from the side navigation and extracts every book listed in it (title and price with currency symbol). Returns one record per book, from the first results page. Sorting by price and counting are done by the caller. Multi-page categories need the 'next' link followed separately.",
+   "params": [
+    "category"
+   ],
+   "steps": [
+    {
+     "action": "goto",
+     "locator": null,
+     "value": "https://books.toscrape.com/"
+    },
+    {
+     "action": "click",
+     "locator": {
+      "role": "link",
+      "name": "{category}"
+     },
+     "value": null
+    }
+   ],
+   "extract": {
+    "type": "css",
+    "selector": "article.product_pod",
+    "fields": {
+     "title": "h3 a@title",
+     "price": ".price_color"
+    }
+   },
+   "uses": 1,
+   "successes": 1,
+   "version": 1,
+   "demoted": false
+  },
+  {
+   "name": "extract_hacker_news_front_page_stories",
+   "domain": "news.ycombinator.com",
+   "description": "Opens the Hacker News front page and returns each story row with its rank, title, and Hacker News item id (from the row's id attribute). Points and comment counts are in the separate subtext row and are not captured by this extract.",
+   "params": [],
+   "steps": [
+    {
+     "action": "goto",
+     "locator": null,
+     "value": "https://news.ycombinator.com"
+    }
+   ],
+   "extract": {
+    "type": "css",
+    "selector": "tr.athing",
+    "fields": {
+     "rank": "span.rank",
+     "title": "span.titleline > a",
+     "item_id": "@id"
+    }
+   },
+   "uses": 0,
+   "successes": 0,
+   "version": 1,
+   "demoted": false
+  },
+  {
+   "name": "open_hn_item_page",
+   "domain": "news.ycombinator.com",
+   "description": "Opens a Hacker News item (story) page by item id and returns the page text, including the story title, points, comment count, and the top-level comment at the top of the thread.",
+   "params": [
+    "item_id"
+   ],
+   "steps": [
+    {
+     "action": "goto",
+     "locator": null,
+     "value": "https://news.ycombinator.com/item?id={item_id}"
+    }
+   ],
+   "extract": {
+    "type": "text"
+   },
+   "uses": 0,
+   "successes": 0,
+   "version": 1,
+   "demoted": false
+  },
+  {
+   "name": "open_hn_story_comments",
+   "domain": "news.ycombinator.com",
+   "description": "Opens a Hacker News item (story) comments page by its item id and returns the page text, from which the story title, points, comment count, and top-level comments can be read.",
+   "params": [
+    "item_id"
+   ],
+   "steps": [
+    {
+     "action": "goto",
+     "locator": null,
+     "value": "https://news.ycombinator.com/item?id={item_id}"
+    }
+   ],
+   "extract": {
+    "type": "text"
+   },
+   "uses": 3,
+   "successes": 3,
+   "version": 1,
+   "demoted": false
+  },
+  {
+   "name": "scrape_hn_front_page_top_stories",
+   "domain": "news.ycombinator.com",
+   "description": "Opens the Hacker News front page and extracts the top story rows in rank order, returning rank, title, and external domain for each story. Points and comment counts sit in the subtext row that follows each story row and are not captured by this row-scoped extraction.",
+   "params": [],
+   "steps": [
+    {
+     "action": "goto",
+     "locator": null,
+     "value": "https://news.ycombinator.com/"
+    }
+   ],
+   "extract": {
+    "type": "css",
+    "selector": "tr.athing",
+    "fields": {
+     "rank": "span.rank",
+     "title": "span.titleline a",
+     "domain": "span.sitestr"
+    }
+   },
+   "uses": 1,
+   "successes": 1,
+   "version": 1,
+   "demoted": false
+  }
+ ]
+}

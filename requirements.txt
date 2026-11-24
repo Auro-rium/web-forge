@@ -1,10 +1,15 @@
-backboard-sdk>=1.5.19
-playwright>=1.45
-rich>=13
-python-dotenv>=1.0
-pyyaml>=6
-pytest>=7
-pytest-asyncio>=0.23
+# --- agent runtime ---
+backboard-sdk>=1.5.19   # LLM + memory via Backboard
+playwright>=1.45        # browser automation (then: playwright install chromium)
+rich>=13                # live terminal UI and tables
+python-dotenv>=1.0      # .env loading
+pyyaml>=6               # benchmark task file
+
+# --- web UI / API server ---
 fastapi
 uvicorn[standard]
 httpx
+
+# --- tests ---
+pytest>=7
+pytest-asyncio>=0.23

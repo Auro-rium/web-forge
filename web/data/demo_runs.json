@@ -1,0 +1,265 @@
+{
+ "runs": [
+  {
+   "id": "demo_cold_poetry",
+   "title": "Cold start: Poetry (the agent learns a skill)",
+   "task": "List the titles and prices of the 3 cheapest books in the 'Poetry' category on https://books.toscrape.com",
+   "recorded": false,
+   "note": "Illustrative replay: the metrics and answer come from a real live run; the event timeline is reconstructed from the event vocabulary, not a byte-for-byte trace.",
+   "events": [
+    {
+     "t": 0.0,
+     "kind": "task_start",
+     "data": {
+      "task": "List the titles and prices of the 3 cheapest books in the 'Poetry' category on https://books.toscrape.com"
+     }
+    },
+    {
+     "t": 1.2,
+     "kind": "todos",
+     "data": {
+      "todos": [
+       {
+        "task": "Open the Poetry category on books.toscrape.com",
+        "status": "doing"
+       },
+       {
+        "task": "Extract titles and prices of all books",
+        "status": "pending"
+       },
+       {
+        "task": "Sort by price and report the 3 cheapest",
+        "status": "pending"
+       }
+      ]
+     }
+    },
+    {
+     "t": 3.1,
+     "kind": "delegate",
+     "data": {
+      "subtask": "Open the Poetry category and extract every book's title and price",
+      "start_url": "https://books.toscrape.com"
+     }
+    },
+    {
+     "t": 5.4,
+     "kind": "observe",
+     "data": {
+      "url": "https://books.toscrape.com/",
+      "n_elements": 73
+     }
+    },
+    {
+     "t": 8.0,
+     "kind": "action",
+     "data": {
+      "action": "click",
+      "args": {
+       "idx": 41
+      },
+      "ok": true,
+      "message": "clicked link 'Poetry'"
+     }
+    },
+    {
+     "t": 10.3,
+     "kind": "observe",
+     "data": {
+      "url": "https://books.toscrape.com/catalogue/category/books/poetry_23/index.html",
+      "n_elements": 44
+     }
+    },
+    {
+     "t": 13.0,
+     "kind": "action",
+     "data": {
+      "action": "extract",
+      "args": {
+       "css": "article.product_pod",
+       "fields": {
+        "title": "h3 a@title",
+        "price": ".price_color"
+       }
+      },
+      "ok": true,
+      "message": "extracted 19 rows"
+     }
+    },
+    {
+     "t": 15.2,
+     "kind": "todos",
+     "data": {
+      "todos": [
+       {
+        "task": "Open the Poetry category on books.toscrape.com",
+        "status": "done"
+       },
+       {
+        "task": "Extract titles and prices of all books",
+        "status": "done"
+       },
+       {
+        "task": "Sort by price and report the 3 cheapest",
+        "status": "doing"
+       }
+      ]
+     }
+    },
+    {
+     "t": 19.0,
+     "kind": "final",
+     "data": {
+      "answer": "The 3 cheapest books in the Poetry category on books.toscrape.com (19 books total, all on one page):\n\n1. Poems That Make Grown Women Cry - £14.19\n2. Untitled Collection: Sabbath Poems 2014 - £14.27\n3. The Collected Poems of W.B. Yeats (The Collected Works of W.B. Yeats #1) - £15.42",
+      "ok": true
+     }
+    },
+    {
+     "t": 21.5,
+     "kind": "skill_built",
+     "data": {
+      "name": "extract_category_books_sorted_by_price",
+      "params": [
+       "category"
+      ],
+      "description": "Opens a books.toscrape.com category from the side navigation and extracts every book listed in it (title and price)."
+     }
+    },
+    {
+     "t": 24.0,
+     "kind": "lesson",
+     "data": {
+      "domain": "books.toscrape.com",
+      "text": "Category pages list books on a single page when under ~20 items; check the page count before paginating."
+     }
+    },
+    {
+     "t": 25.2,
+     "kind": "lesson",
+     "data": {
+      "domain": "books.toscrape.com",
+      "text": "Extract book listings with article.product_pod, reading the full title from h3 a's title attribute and price from p.price_color."
+     }
+    }
+   ],
+   "result": {
+    "task": "List the titles and prices of the 3 cheapest books in the 'Poetry' category on https://books.toscrape.com",
+    "answer": "The 3 cheapest books in the Poetry category on books.toscrape.com (19 books total, all on one page):\n\n1. Poems That Make Grown Women Cry - £14.19\n2. Untitled Collection: Sabbath Poems 2014 - £14.27\n3. The Collected Poems of W.B. Yeats (The Collected Works of W.B. Yeats #1) - £15.42",
+    "ok": true,
+    "steps": 3,
+    "llm_calls": 8,
+    "tokens": 2924,
+    "cost_usd": 0.002979,
+    "seconds": 25.5,
+    "skills_used": [],
+    "skills_created": [
+     "extract_category_books_sorted_by_price"
+    ]
+   }
+  },
+  {
+   "id": "demo_learned_travel",
+   "title": "Learned: Travel (reuses the skill, no browsing LLM)",
+   "task": "List the titles and prices of the 3 cheapest books in the 'Travel' category on https://books.toscrape.com",
+   "recorded": false,
+   "note": "Illustrative replay: the metrics and answer come from a real live run; the event timeline is reconstructed from the event vocabulary, not a byte-for-byte trace.",
+   "events": [
+    {
+     "t": 0.0,
+     "kind": "task_start",
+     "data": {
+      "task": "List the titles and prices of the 3 cheapest books in the 'Travel' category on https://books.toscrape.com"
+     }
+    },
+    {
+     "t": 0.8,
+     "kind": "memory_hits",
+     "data": {
+      "text": "- Skill extract_category_books_sorted_by_price(category): opens a books.toscrape.com category and extracts every book (title, price).\n- Category pages list books on a single page when under ~20 items."
+     }
+    },
+    {
+     "t": 2.5,
+     "kind": "todos",
+     "data": {
+      "todos": [
+       {
+        "task": "Run the category skill for 'Travel'",
+        "status": "doing"
+       },
+       {
+        "task": "Report the 3 cheapest books",
+        "status": "pending"
+       }
+      ]
+     }
+    },
+    {
+     "t": 4.0,
+     "kind": "skill_run",
+     "data": {
+      "name": "extract_category_books_sorted_by_price",
+      "params": {
+       "category": "Travel"
+      }
+     }
+    },
+    {
+     "t": 8.6,
+     "kind": "skill_result",
+     "data": {
+      "name": "extract_category_books_sorted_by_price",
+      "ok": true,
+      "message": "replayed 2 steps, extracted 11 rows"
+     }
+    },
+    {
+     "t": 9.4,
+     "kind": "todos",
+     "data": {
+      "todos": [
+       {
+        "task": "Run the category skill for 'Travel'",
+        "status": "done"
+       },
+       {
+        "task": "Report the 3 cheapest books",
+        "status": "doing"
+       }
+      ]
+     }
+    },
+    {
+     "t": 10.6,
+     "kind": "final",
+     "data": {
+      "answer": "The 3 cheapest books in the 'Travel' category on books.toscrape.com are:\n\n1. The Road to Little Dribbling: Adventures of an American in Britain (Notes From a Small Island #2) - £23.21\n2. 1,000 Places to See Before You Die - £26.08\n3. The Great Railway Bazaar - £30.54",
+      "ok": true
+     }
+    },
+    {
+     "t": 11.8,
+     "kind": "lesson",
+     "data": {
+      "domain": "books.toscrape.com",
+      "text": "The category skill transfers to other categories by changing only the 'category' parameter."
+     }
+    }
+   ],
+   "result": {
+    "task": "List the titles and prices of the 3 cheapest books in the 'Travel' category on https://books.toscrape.com",
+    "answer": "The 3 cheapest books in the 'Travel' category on books.toscrape.com are:\n\n1. The Road to Little Dribbling: Adventures of an American in Britain (Notes From a Small Island #2) - £23.21\n2. 1,000 Places to See Before You Die - £26.08\n3. The Great Railway Bazaar - £30.54",
+    "ok": true,
+    "steps": 2,
+    "llm_calls": 4,
+    "tokens": 1310,
+    "cost_usd": 0.0006,
+    "seconds": 12.1,
+    "skills_used": [
+     "extract_category_books_sorted_by_price"
+    ],
+    "skills_created": []
+   }
+  }
+ ]
+}

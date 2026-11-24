@@ -47,6 +47,7 @@ def _build_parser() -> argparse.ArgumentParser:
     w = sub.add_parser("serve", help="web UI + API server")
     w.add_argument("--port", type=int, default=8000)
     w.add_argument("--host", default="127.0.0.1")
+    w.add_argument("--headed", action="store_true", help="show the real browser window while the agent runs (live demo)")
 
     f = sub.add_parser("serve-fixtures", help="serve the offline demo site")
     f.add_argument("--port", type=int, default=8765)
@@ -183,6 +184,9 @@ def main(argv=None) -> int:
     if args.cmd == "bench":
         return asyncio.run(_cmd_bench(args))
     if args.cmd == "serve":
+        import os
+        if args.headed:
+            os.environ["WEBFORGE_HEADED"] = "1"
         from webforge.server import serve
         serve(args.host, args.port)
         return 0

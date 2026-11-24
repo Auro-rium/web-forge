@@ -177,7 +177,7 @@ async def _execute(run: Run, cfg: Config) -> None:
         memory = make_memory(cfg, local_only=mock)
         library = SkillLibrary(cfg.skills_dir)
         browser = Browser(chromium_path=cfg.chromium_path, allowed_domains=cfg.allowed_domains)
-        await browser.start(headless=True)
+        await browser.start(headless=os.getenv("WEBFORGE_HEADED") != "1")
         run_dir = Path(cfg.runs_dir) / run.id
         res = await run_task(run.req.task, llm=llm, browser=browser, library=library, memory=memory, cfg=cfg,
                              on_event=on_event, learn=run.req.learn, use_memory=run.req.use_memory,
