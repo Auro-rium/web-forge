@@ -46,7 +46,7 @@ Nothing about the model changes; the improvement comes from stored skills and re
 ## Docker (recommended for a first run)
 
 ```bash
-git clone <this repo> && cd deep-agents
+git clone https://github.com/Auro-rium/webforge.git && cd webforge
 docker compose up --build
 ```
 
