@@ -90,7 +90,7 @@ class BudgetExceeded(RuntimeError):
 
 
 def _ledger_path(cfg: Config) -> Path:
-    return cfg.data_dir / "spend.json"
+    return cfg.ledger_file
 
 
 def ledger_total(cfg: Config) -> float:

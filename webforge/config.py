@@ -24,6 +24,8 @@ class Config:
     runs_dir: Path = field(default_factory=lambda: Path(os.getenv("WEBFORGE_RUNS", ROOT / "runs")))
     # hard cap on cumulative Backboard spend (persisted in data/spend.json); cheap model by default
     budget_usd: float = float(os.getenv("WEBFORGE_BUDGET_USD", "3.0"))
+    # global spend ledger: independent of data_dir so isolated bench dirs still count toward the cap
+    ledger_file: Path = field(default_factory=lambda: Path(os.getenv("WEBFORGE_LEDGER", ROOT / "data" / "spend.json")))
     worker_max_steps: int = int(os.getenv("WEBFORGE_WORKER_STEPS", "25"))
     planner_max_steps: int = int(os.getenv("WEBFORGE_PLANNER_STEPS", "30"))
     headless: bool = os.getenv("WEBFORGE_HEADED", "0") != "1"
