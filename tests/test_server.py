@@ -17,11 +17,14 @@ def cfg(tmp_path, monkeypatch):
     c.runs_dir = tmp_path / "runs"
     c.ledger_file = c.data_dir / "spend.json"
     c.budget_usd = 1.0
+    c.api_key = "env-test-key-0000"
     c.runs_dir.mkdir()
     c.data_dir.mkdir()
     monkeypatch.setattr(server, "get_cfg", lambda: c)
     monkeypatch.delenv("WEBFORGE_ACCESS_CODE", raising=False)
     monkeypatch.delenv("WEBFORGE_MOCK", raising=False)
+    monkeypatch.delenv("WEBFORGE_LOCAL", raising=False)
+    server._KEY_ATTEMPTS.clear()
     server.STATE.runs.clear()
     server.STATE.active = None
     return c
@@ -166,3 +169,111 @@ def test_cors_defaults(monkeypatch):
     assert server._cors_origins() == []
     monkeypatch.setenv("WEBFORGE_CORS_ORIGINS", "https://a.vercel.app/, https://b.dev")
     assert server._cors_origins() == ["https://a.vercel.app", "https://b.dev"]
+
+
+# ------------------------------------------------------------ key settings ---
+
+GOOD_KEY = "bb_test_1234567890abcdef"
+
+
+def _ok_verify(monkeypatch):
+    async def fake(key, cfg):
+        return None
+    monkeypatch.setattr(server, "verify_key", fake)
+
+
+def test_health_key_fields_never_leak(client, cfg):
+    h = client.get("/api/health").json()
+    assert h["has_key"] is True and h["key_source"] == "env" and h["needs_key"] is False
+    assert "local_mode" in h and cfg.api_key not in json.dumps(h)
+    cfg.api_key = ""
+    h = client.get("/api/health").json()
+    assert (h["has_key"], h["key_source"], h["needs_key"]) == (False, "none", True)
+    cfg.api_key = "proxy-injected"
+    h = client.get("/api/health").json()
+    assert h["key_source"] == "proxy" and h["needs_key"] is False
+
+
+def test_save_key_writes_0600_and_health_reports_saved(client, cfg, monkeypatch):
+    cfg.api_key = ""
+    _ok_verify(monkeypatch)
+    r = client.post("/api/settings/key", json={"api_key": "  " + GOOD_KEY + "\n"})
+    assert r.status_code == 200 and r.json() == {"ok": True, "key_source": "saved"}
+    f = cfg.data_dir / "backboard_key"
+    assert f.read_text() == GOOD_KEY and (f.stat().st_mode & 0o777) == 0o600
+    h = client.get("/api/health").json()
+    assert h["key_source"] == "saved" and h["has_key"] and not h["needs_key"]
+    assert GOOD_KEY not in json.dumps(h) and GOOD_KEY not in r.text
+
+
+def test_key_resolution_order(cfg):
+    (cfg.data_dir / "backboard_key").write_text("saved-key-0000000")
+    cfg.api_key = "proxy-injected"
+    assert server.resolve_key(cfg) == ("saved-key-0000000", "saved")   # saved beats the placeholder
+    cfg.api_key = "real-env-key-0000"
+    assert server.resolve_key(cfg) == ("real-env-key-0000", "env")     # real env key beats saved
+    assert server._cfg_with_key(cfg).api_key == "real-env-key-0000"
+
+
+def test_save_key_invalid_shape(client, cfg, monkeypatch):
+    _ok_verify(monkeypatch)
+    for bad in ("", "short", "has space inside key", "x" * 301, "ctrl\x01char-in-key-1"):
+        assert client.post("/api/settings/key", json={"api_key": bad}).status_code == 422
+    assert not (cfg.data_dir / "backboard_key").exists()
+
+
+def test_save_key_rejected_and_unreachable_not_saved(client, cfg, monkeypatch):
+    async def rejected(key, cfg):
+        raise server.KeyRejected()
+    monkeypatch.setattr(server, "verify_key", rejected)
+    r = client.post("/api/settings/key", json={"api_key": GOOD_KEY})
+    assert r.status_code == 400 and r.json()["error"] == "Backboard rejected this key"
+
+    async def down(key, cfg):
+        raise server.KeyUnverifiable(f"ConnectError: boom {key}")
+    monkeypatch.setattr(server, "verify_key", down)
+    r = client.post("/api/settings/key", json={"api_key": GOOD_KEY})
+    assert r.status_code == 502 and GOOD_KEY not in r.text
+    assert not (cfg.data_dir / "backboard_key").exists()
+
+
+def test_key_endpoints_need_access_code_when_set(client, cfg, monkeypatch):
+    _ok_verify(monkeypatch)
+    monkeypatch.setenv("WEBFORGE_ACCESS_CODE", "sesame")
+    assert client.post("/api/settings/key", json={"api_key": GOOD_KEY}).status_code == 403
+    assert client.post("/api/settings/key", json={"api_key": GOOD_KEY},
+                       headers={"X-Access-Code": "nope"}).status_code == 403
+    assert client.delete("/api/settings/key").status_code == 403
+    assert client.post("/api/settings/key", json={"api_key": GOOD_KEY},
+                       headers={"X-Access-Code": "sesame"}).status_code == 200
+
+
+def test_key_endpoint_remote_client_needs_local_mode(cfg, monkeypatch):
+    _ok_verify(monkeypatch)
+    with TestClient(server.app, client=("203.0.113.9", 5555)) as c:
+        assert c.post("/api/settings/key", json={"api_key": GOOD_KEY}).status_code == 403
+        monkeypatch.setenv("WEBFORGE_LOCAL", "1")
+        assert c.post("/api/settings/key", json={"api_key": GOOD_KEY}).status_code == 200
+
+
+def test_delete_key_and_rate_limit(client, cfg, monkeypatch):
+    cfg.api_key = ""
+    _ok_verify(monkeypatch)
+    client.post("/api/settings/key", json={"api_key": GOOD_KEY})
+    r = client.delete("/api/settings/key")
+    assert r.status_code == 200 and r.json()["key_source"] == "none"
+    assert not (cfg.data_dir / "backboard_key").exists()
+    assert client.delete("/api/settings/key").status_code == 200   # idempotent
+    for _ in range(server.KEY_ATTEMPTS_PER_MIN):
+        client.post("/api/settings/key", json={"api_key": "short"})
+    assert client.post("/api/settings/key", json={"api_key": GOOD_KEY}).status_code == 429
+
+
+def test_run_without_key_is_428(client, cfg, monkeypatch):
+    monkeypatch.setattr(server, "_execute", _stub())
+    cfg.api_key = ""
+    r = client.post("/api/run", json={"task": "hello"})
+    assert r.status_code == 428 and r.json() == {"error": "Backboard API key not set", "needs_key": True}
+    assert server.STATE.active is None
+    monkeypatch.setenv("WEBFORGE_MOCK", "1")      # mock mode never needs a key
+    assert client.post("/api/run", json={"task": "hello"}).status_code == 202

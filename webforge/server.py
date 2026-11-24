@@ -7,11 +7,15 @@ Env:
   WEBFORGE_CORS_ORIGINS  comma list of allowed browser origins ("*" allowed). Default "*" only when no access code
                          is set; with an access code and no list, cross-origin browsers are refused.
   WEBFORGE_MOCK=1        use the offline MockLLM + local memory (no Backboard key / spend)
+  WEBFORGE_LOCAL=1       trust the client (set by docker-compose, which publishes the port on 127.0.0.1 only):
+                         lets the browser save the Backboard key without an access code
+Backboard key resolution: env BACKBOARD_API_KEY > key saved from the web UI (<data_dir>/backboard_key) > none.
 Everything else comes from webforge.config.Config. API keys are never returned or logged.
 """
 from __future__ import annotations
 
 import asyncio
+import copy
 import dataclasses
 import hmac
 import json
@@ -19,7 +23,7 @@ import os
 import re
 import secrets
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from pathlib import Path
 from typing import Any, Optional
 
@@ -82,6 +86,116 @@ def _require_admin(request: Request, provided: Optional[str]) -> None:
     host = request.client.host if request.client else ""
     if host not in ("127.0.0.1", "::1", "localhost", "testclient"):
         raise HTTPException(403, "Set WEBFORGE_ACCESS_CODE to allow this action from a remote client.")
+
+
+# ------------------------------------------------------------ backboard key ---
+
+PLACEHOLDER_KEY = "proxy-injected"   # sandbox network proxy injects the real key; the code sends this placeholder
+KEY_FILE_NAME = "backboard_key"
+_KEY_ATTEMPTS: "deque[float]" = deque()
+KEY_ATTEMPTS_PER_MIN = 10
+
+
+def _local_mode() -> bool:
+    return os.getenv("WEBFORGE_LOCAL", "") == "1"
+
+
+def _key_path(cfg: Config) -> Path:
+    return Path(cfg.data_dir) / KEY_FILE_NAME
+
+
+def _read_saved_key(cfg: Config) -> str:
+    try:
+        return _key_path(cfg).read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+
+
+def resolve_key(cfg: Config) -> tuple[str, str]:
+    """(key, source). source: env | saved | proxy | none. Order: real env key > saved file > proxy placeholder."""
+    env = (cfg.api_key or "").strip()
+    if env and env != PLACEHOLDER_KEY:
+        return env, "env"
+    saved = _read_saved_key(cfg)
+    if saved:
+        return saved, "saved"
+    if env == PLACEHOLDER_KEY:
+        return env, "proxy"
+    return "", "none"
+
+
+def _cfg_with_key(cfg: Config) -> Config:
+    """Per-run copy of cfg carrying the resolved key (global env is never mutated)."""
+    key, _ = resolve_key(cfg)
+    c = copy.copy(cfg)
+    c.api_key = key
+    return c
+
+
+def _needs_key(cfg: Config) -> bool:
+    return (not _mock()) and resolve_key(cfg)[1] == "none"
+
+
+def _scrub(text: str, *secrets_: str) -> str:
+    for sec in secrets_:
+        if sec:
+            text = text.replace(sec, "[redacted]")
+    return text
+
+
+def _require_key_admin(request: Request, provided: Optional[str]) -> None:
+    if _access_code():
+        if not _check_code(provided):
+            raise HTTPException(403, "Access code required (header X-Access-Code).")
+        return
+    host = request.client.host if request.client else ""
+    if _local_mode() or host in ("127.0.0.1", "::1", "localhost", "testclient"):
+        return
+    raise HTTPException(403, "Saving a key is only allowed locally (WEBFORGE_LOCAL=1) or with WEBFORGE_ACCESS_CODE set.")
+
+
+def _rate_limit_key_attempts() -> None:
+    now = time.monotonic()
+    while _KEY_ATTEMPTS and now - _KEY_ATTEMPTS[0] > 60:
+        _KEY_ATTEMPTS.popleft()
+    if len(_KEY_ATTEMPTS) >= KEY_ATTEMPTS_PER_MIN:
+        raise HTTPException(429, "Too many key attempts. Wait a minute and try again.")
+    _KEY_ATTEMPTS.append(now)
+
+
+class KeyRejected(Exception):
+    """Backboard answered 401/403 for this key."""
+
+
+class KeyUnverifiable(Exception):
+    """Could not reach Backboard (network, timeout, 5xx)."""
+
+
+async def verify_key(key: str, cfg: Config) -> None:
+    """Cheap authenticated Backboard call. Returns None if accepted; raises KeyRejected / KeyUnverifiable."""
+    from backboard import BackboardClient
+    client = BackboardClient(api_key=key, base_url=cfg.base_url, timeout=20)
+    try:
+        await client.list_assistants(limit=1)
+    except Exception as e:  # noqa: BLE001
+        status = getattr(e, "status_code", None)
+        if status in (401, 403):
+            raise KeyRejected() from None
+        raise KeyUnverifiable(_scrub(f"{type(e).__name__}: {str(e)[:200]}", key)) from None
+    finally:
+        try:
+            await client.aclose()
+        except Exception:
+            pass
+
+
+class KeyRequest(BaseModel):
+    api_key: str
+
+
+def _valid_key_shape(k: str) -> bool:
+    return 10 <= len(k) <= 300 and not any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in k)
+
 
 
 # ------------------------------------------------------------------ runs ---
@@ -187,7 +301,7 @@ async def _execute(run: Run, cfg: Config) -> None:
         run.error = "cancelled"
         raise
     except Exception as e:  # noqa: BLE001
-        run.error = f"{type(e).__name__}: {str(e)[:300]}"
+        run.error = _scrub(f"{type(e).__name__}: {str(e)[:300]}", cfg.api_key)
         await _push(run, "error", {"message": run.error})
     finally:
         for closer in (getattr(browser, "close", None), getattr(llm, "aclose", None),
@@ -204,7 +318,7 @@ async def _run_wrapper(run: Run, cfg: Config) -> None:
         await _execute(run, cfg)  # browser/LLM are closed before we announce "done"
         await asyncio.sleep(0)    # let queued on_event pushes land first
     except BaseException as e:  # noqa: BLE001
-        run.error = run.error or f"{type(e).__name__}: {str(e)[:300]}"
+        run.error = run.error or _scrub(f"{type(e).__name__}: {str(e)[:300]}", cfg.api_key)
     finally:
         _persist(cfg, run)
         if run.status == "running":
@@ -240,10 +354,61 @@ def _spend(cfg: Config) -> float:
 @app.get("/api/health")
 async def health() -> dict:
     cfg = get_cfg()
+    _, key_source = resolve_key(cfg)
     return {"ok": True, "mock": _mock(), "model": cfg.model, "provider": cfg.provider,
+            "has_key": key_source != "none", "key_source": key_source,
+            "needs_key": _needs_key(cfg), "local_mode": _local_mode(),
             "spend_usd": _spend(cfg), "budget_usd": cfg.budget_usd, "browser": _browser_available(cfg),
             "needs_code": bool(_access_code()), "busy": STATE.active is not None,
             "allowed_domains": list(cfg.allowed_domains)}
+
+@app.post("/api/settings/key")
+async def settings_key_set(body: KeyRequest, request: Request,
+                           x_access_code: Optional[str] = Header(default=None)) -> dict:
+    _require_key_admin(request, x_access_code)
+    _rate_limit_key_attempts()
+    key = (body.api_key or "").strip()
+    if not _valid_key_shape(key):
+        raise HTTPException(422, "That does not look like an API key (10-300 characters, no spaces).")
+    cfg = get_cfg()
+    try:
+        await verify_key(key, cfg)
+    except KeyRejected:
+        return JSONResponse({"error": "Backboard rejected this key"}, status_code=400)
+    except KeyUnverifiable as e:
+        return JSONResponse({"error": "Could not reach Backboard to check the key (" + _scrub(str(e), key) +
+                                      "). Check your internet connection and try again; nothing was saved."},
+                            status_code=502)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": "Could not verify the key: " + _scrub(type(e).__name__, key)},
+                            status_code=502)
+    path = _key_path(cfg)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(key)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except Exception:
+            pass
+        raise
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+    return {"ok": True, "key_source": resolve_key(cfg)[1]}
+
+
+@app.delete("/api/settings/key")
+async def settings_key_delete(request: Request, x_access_code: Optional[str] = Header(default=None)) -> dict:
+    _require_key_admin(request, x_access_code)
+    try:
+        _key_path(get_cfg()).unlink()
+    except FileNotFoundError:
+        pass
+    return {"ok": True, "key_source": resolve_key(get_cfg())[1]}
+
 
 
 @app.get("/api/spend")
@@ -275,6 +440,9 @@ async def start_run(req: RunRequest, x_access_code: Optional[str] = Header(defau
     if any(ord(c) < 32 and c not in "\n\t" for c in task):
         raise HTTPException(422, "Task contains control characters.")
     cfg = get_cfg()
+    if _needs_key(cfg):
+        return JSONResponse({"error": "Backboard API key not set", "needs_key": True}, status_code=428)
+    cfg = _cfg_with_key(cfg)
     if not _mock() and _spend(cfg) >= cfg.budget_usd:
         raise HTTPException(402, f"Budget exhausted (${_spend(cfg):.2f} of ${cfg.budget_usd:.2f}).")
     if STATE.active is not None:  # single-threaded event loop: check+set is atomic (no await between)
@@ -387,7 +555,7 @@ async def memory_list() -> dict:
 async def memory_reset(request: Request, x_access_code: Optional[str] = Header(default=None)) -> dict:
     _require_admin(request, x_access_code)
     from webforge.memory import make_memory
-    mem = make_memory(get_cfg(), local_only=_mock())
+    mem = make_memory(_cfg_with_key(get_cfg()), local_only=_mock())
     try:
         await mem.reset()
     finally:

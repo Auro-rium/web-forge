@@ -4,8 +4,9 @@ Goal: show that WebForge solves a web task with an LLM, turns what worked into a
 
 ## Pre-flight checklist (15 minutes before)
 
-- [ ] `.env` exists with a valid `BACKBOARD_API_KEY` (copy from `.env.example`). Never show this file on screen.
-- [ ] `pip install -r requirements.txt` and `python -m playwright install chromium` done.
+- [ ] Pick one path (never show your key on screen):
+  - **Local Python:** `.env` exists with a valid `BACKBOARD_API_KEY` (copy from `.env.example`); `pip install -r requirements.txt` and `python -m playwright install chromium` done; start with `python -m webforge serve` (add `--headed` to show the browser window).
+  - **Docker:** `docker compose up --build`, open http://localhost:8000 and paste the key into the "Connect Backboard" card (or set `BACKBOARD_API_KEY` beforehand). The browser is headless in Docker, so `--headed` is only available on the host.
 - [ ] Network works; open https://books.toscrape.com in a normal browser tab to confirm the site is up.
 - [ ] Start the server: `python -m webforge serve`, open http://localhost:8000.
   - Start the server with `python -m webforge serve --headed` so the real Chromium window opens on the projector while the audience also sees the todo list, actions timeline and metrics in the page. Without `--headed` the browser runs invisibly.

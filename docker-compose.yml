@@ -1,0 +1,31 @@
+# One command: docker compose up --build   then open http://localhost:8000 and paste your Backboard key.
+services:
+  webforge:
+    build: .
+    image: webforge-backend
+    init: true
+    restart: unless-stopped
+    shm_size: 1gb                      # Chromium crashes with Docker's default 64 MB /dev/shm
+    ports:
+      - "127.0.0.1:8000:8000"          # localhost only: the key form is never exposed on your network
+    environment:
+      WEBFORGE_LOCAL: "1"              # trust the (localhost-only) browser to save the key from the web UI
+      WEBFORGE_DATA: /app/data
+      WEBFORGE_RUNS: /app/runs
+      BACKBOARD_API_KEY: ${BACKBOARD_API_KEY:-}          # optional; takes precedence over a key saved in the UI
+      WEBFORGE_PROVIDER: ${WEBFORGE_PROVIDER:-anthropic}
+      WEBFORGE_MODEL: ${WEBFORGE_MODEL:-claude-haiku-5-5}
+      WEBFORGE_BUDGET_USD: ${WEBFORGE_BUDGET_USD:-3.0}
+    volumes:
+      - webforge-data:/app/data        # skills, memory mirror, spend ledger, saved key
+      - webforge-runs:/app/runs        # run recordings
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 6s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  webforge-data:
+  webforge-runs:

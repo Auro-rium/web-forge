@@ -1,5 +1,8 @@
 .git
+.gitignore
 .env
+.env.*
+!.env.example
 .venv
 venv
 __pycache__
@@ -8,5 +11,8 @@ __pycache__
 data
 runs
 tests
+docs
 node_modules
 *.log
+Dockerfile
+docker-compose.yml

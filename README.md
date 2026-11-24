@@ -3,7 +3,7 @@
 **A web-browsing deep agent that turns what worked into reusable skills, so repeated tasks get cheaper and faster.**
 
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
-![tests](https://img.shields.io/badge/tests-41%20passed%2C%201%20skipped-brightgreen)
+![tests](https://img.shields.io/badge/tests-50%20passed%2C%201%20skipped-brightgreen)
 ![license MIT](https://img.shields.io/badge/license-MIT-lightgrey)
 
 ## What it is
@@ -42,6 +42,21 @@ Details, sequence diagram and design decisions: [docs/ARCHITECTURE.md](docs/ARCH
 5. **Repair and demotion.** If a skill breaks at run time, WebForge asks the LLM to fix the failing step, re-validates, and bumps the skill version. A skill with at least 3 uses and under 50% success is demoted (hidden from the planner, kept on disk).
 
 Nothing about the model changes; the improvement comes from stored skills and retrieved text.
+
+## Docker (recommended for a first run)
+
+```bash
+git clone <this repo> && cd deep-agents
+docker compose up --build
+```
+
+Open <http://localhost:8000>, paste your [Backboard](https://backboard.io) API key into the "Connect Backboard" card, and run a task. No `.env` editing is needed. If `BACKBOARD_API_KEY` is set in your shell or a `.env` file next to `docker-compose.yml`, it is used instead and the card does not appear (precedence: environment variable, then the key saved from the web page, then none).
+
+- **Where the key goes.** The page sends it to your local server, which checks it with a cheap Backboard call and stores it in `data/backboard_key` (mode 0600) inside the `webforge-data` volume. It is never returned by the API. The port is published on `127.0.0.1` only, and the save-key endpoint is only enabled because compose sets `WEBFORGE_LOCAL=1`; do not publish the port on other interfaces without also setting `WEBFORGE_ACCESS_CODE`. "Forget saved key" (under Connection) deletes it.
+- **What persists.** Two named volumes: `webforge-data` (learned skills, memory mirror, spend ledger, saved key) and `webforge-runs` (run recordings). They survive `docker compose down` and restarts. Reset everything, including the spend cap ledger, with `docker compose down -v`.
+- **Headless.** Docker has no display, so the web UI runs Chromium headless there. To watch the browser window (e.g. for a live demo), run on the host instead: `python -m webforge serve --headed`.
+- **Settings.** `WEBFORGE_MODEL`, `WEBFORGE_PROVIDER` and `WEBFORGE_BUDGET_USD` pass through from your environment (defaults: `claude-haiku-5-5`, `anthropic`, `3.0`).
+- **Troubleshooting.** Port 8000 in use: change the left side of `127.0.0.1:8000:8000` in `docker-compose.yml`. Chromium crashes: keep `shm_size: 1gb`. Anything else: `docker compose logs -f` (also `make docker-up`, `make docker-down`, `make docker-logs`).
 
 ## Quickstart (laptop)
 
@@ -195,7 +210,7 @@ Dockerfile, render.yaml, vercel.json   deployment
 ## Testing
 
 ```bash
-python -m pytest -q      # 41 passed, 1 skipped (the skip is the live Backboard round-trip: set `WEBFORGE_LIVE=1` and a key to run it)
+python -m pytest -q      # 50 passed, 1 skipped (the skip is the live Backboard round-trip: set `WEBFORGE_LIVE=1` and a key to run it)
 ```
 
 Tests run fully offline: `MockLLM`/`ScriptedMock` stand in for the model and a local copy of the fixture site stands in for the web. No key, no spend.

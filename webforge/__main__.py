@@ -45,7 +45,7 @@ def _build_parser() -> argparse.ArgumentParser:
     rp.add_argument("cold"); rp.add_argument("learned")
 
     w = sub.add_parser("serve", help="web UI + API server")
-    w.add_argument("--port", type=int, default=8000)
+    w.add_argument("--port", type=int, default=None, help="default: $PORT or 8000")
     w.add_argument("--host", default="127.0.0.1")
     w.add_argument("--headed", action="store_true", help="show the real browser window while the agent runs (live demo)")
 
@@ -188,7 +188,7 @@ def main(argv=None) -> int:
         if args.headed:
             os.environ["WEBFORGE_HEADED"] = "1"
         from webforge.server import serve
-        serve(args.host, args.port)
+        serve(args.host, args.port or int(os.getenv("PORT", "8000") or 8000))
         return 0
     if args.cmd == "serve-fixtures":
         return _cmd_serve(args)
