@@ -1,0 +1,46 @@
+# WebForge benchmark. Tasks are run IN ORDER. Within a family, variant 1 is where the
+# agent can learn a skill; later variants should transfer (fewer steps/tokens in `learned` mode).
+# check types: contains_all / contains_any {values}, regex {pattern}, min_matches {pattern, count}
+tasks:
+  # --- family: books_category (expect: skill "list books in category" learned on Poetry, reused on Travel/Mystery)
+  - id: books_poetry
+    family: books_category
+    prompt: "List the titles and prices of the 3 cheapest books in the 'Poetry' category on https://books.toscrape.com"
+    check: {type: min_matches, pattern: "£\\d+\\.\\d\\d", count: 3}
+  - id: books_travel
+    family: books_category
+    prompt: "List the titles and prices of the 3 cheapest books in the 'Travel' category on https://books.toscrape.com"
+    check: {type: min_matches, pattern: "£\\d+\\.\\d\\d", count: 3}
+  - id: books_mystery
+    family: books_category
+    prompt: "List the titles and prices of the 3 cheapest books in the 'Mystery' category on https://books.toscrape.com"
+    check: {type: min_matches, pattern: "£\\d+\\.\\d\\d", count: 3}
+
+  # --- family: quotes_by_tag (expect: skill "quotes for tag" transfers across tags)
+  # Quote text is hard to check generically; require an attribution pattern ("by X" / "- X" / author-ish) at least 3 times.
+  - id: quotes_love
+    family: quotes_by_tag
+    prompt: "On https://quotes.toscrape.com list the first 3 quotes with tag 'love' and their authors"
+    check: {type: min_matches, pattern: "(?:by|[-–—])\\s*[A-Z][a-z]+(?:[ .]+[A-Z][a-z.]*)+|\\b(?:Jane Austen|Marilyn Monroe|Albert Einstein|André Gide|Thomas A\\. Edison|Eleanor Roosevelt|Steve Martin|Bob Marley|Dr\\. Seuss|J\\.K\\. Rowling)\\b", count: 3}
+  - id: quotes_life
+    family: quotes_by_tag
+    prompt: "On https://quotes.toscrape.com list the first 3 quotes with tag 'life' and their authors"
+    check: {type: min_matches, pattern: "(?:by|[-–—])\\s*[A-Z][a-z]+(?:[ .]+[A-Z][a-z.]*)+|\\b(?:Jane Austen|Marilyn Monroe|Albert Einstein|André Gide|Thomas A\\. Edison|Eleanor Roosevelt|Steve Martin|Bob Marley|Dr\\. Seuss|J\\.K\\. Rowling)\\b", count: 3}
+  - id: quotes_books
+    family: quotes_by_tag
+    prompt: "On https://quotes.toscrape.com list the first 3 quotes with tag 'books' and their authors"
+    check: {type: min_matches, pattern: "(?:by|[-–—])\\s*[A-Z][a-z]+(?:[ .]+[A-Z][a-z.]*)+|\\b(?:Jane Austen|Marilyn Monroe|Albert Einstein|André Gide|Thomas A\\. Edison|Eleanor Roosevelt|Steve Martin|Bob Marley|Dr\\. Seuss|J\\.K\\. Rowling)\\b", count: 3}
+
+  # --- family: wiki_summary (expect: skill "wikipedia article first sentence" transfers across subjects)
+  - id: wiki_lovelace
+    family: wiki_summary
+    prompt: "On https://en.wikipedia.org get the first sentence of the article about 'Ada Lovelace'"
+    check: {type: contains_all, values: ["Lovelace"]}
+  - id: wiki_turing
+    family: wiki_summary
+    prompt: "On https://en.wikipedia.org get the first sentence of the article about 'Alan Turing'"
+    check: {type: contains_all, values: ["Turing"]}
+  - id: wiki_hopper
+    family: wiki_summary
+    prompt: "On https://en.wikipedia.org get the first sentence of the article about 'Grace Hopper'"
+    check: {type: contains_all, values: ["Hopper"]}
