@@ -3,23 +3,28 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="light dark">
-<title>WebForge - a self-improving web agent</title>
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0a0b0e">
+<title>WebForge</title>
 <meta name="description" content="Watch a web-browsing deep agent learn reusable skills and get faster, cheaper and more reliable with every task.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232f6df6'/%3E%3Cpath d='M9 10l3 12 4-9 4 9 3-12' fill='none' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23080a10'/%3E%3Cpath d='M5 9h22M5 16h14M5 23h22' stroke='%238ea6ff' stroke-width='3'/%3E%3Crect x='22' y='13' width='5' height='6' fill='%23ffb454'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=JetBrains+Mono:wght@400;500;700&display=swap">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<canvas id="field" aria-hidden="true"></canvas>
 <header class="top">
   <div class="wrap top-in">
     <a class="brand" href="#run" aria-label="WebForge home">
-      <span class="logo" aria-hidden="true"></span><span>WebForge</span>
+      <span class="logo" aria-hidden="true">▚▞</span><span class="wm">webforge<i class="caret" aria-hidden="true"></i></span>
     </a>
     <nav class="tabs" id="tabs" role="tablist" aria-label="Sections">
-      <button role="tab" data-tab="run" aria-selected="true">Run</button>
-      <button role="tab" data-tab="learning" aria-selected="false">Learning</button>
-      <button role="tab" data-tab="library" aria-selected="false">Skills &amp; Memory</button>
-      <button role="tab" data-tab="arch" aria-selected="false">Architecture</button>
+      <button role="tab" data-tab="run" aria-selected="true">run</button>
+      <button role="tab" data-tab="learning" aria-selected="false">learning</button>
+      <button role="tab" data-tab="library" aria-selected="false">skills &amp; memory</button>
+      <button role="tab" data-tab="arch" aria-selected="false">architecture</button>
     </nav>
     <span class="pill" id="conn-pill" title="Backend connection"><i class="dot"></i><span id="conn-text">checking...</span></span>
   </div>
@@ -30,14 +35,40 @@
 <!-- ================================ RUN ================================ -->
 <section id="tab-run" class="panel" role="tabpanel">
   <div class="hero">
-    <h1>An agent that gets better every time it browses.</h1>
-    <p class="lead">Give it a web task. It plans, browses, then turns what worked into a reusable <b>skill</b> and writes down <b>lessons</b>. The next similar task skips the exploration.</p>
+    <p class="prompt" aria-hidden="true"><span class="ps">$</span> webforge run <span class="flag">--learn</span><i class="caret"></i></p>
+    <h1 id="hero-title" aria-label="Browse once. Replay it cheap."><span class="l1" data-t="Browse once.">Browse once.</span><span class="l2" data-t="Replay it cheap.">Replay it cheap.</span></h1>
+    <p class="lead">WebForge drives a real browser through a task, then compiles what worked into a <b>skill</b> it can replay with no LLM calls, and writes down <b>lessons</b> for next time.</p>
+
+    <div class="stage" id="stage" role="img" aria-label="Animated illustration: a first-time run wanders through eight steps, a run that reuses a learned skill finishes in two.">
+      <figure class="pane cold">
+        <figcaption><span class="k"><i></i>first time</span><em>no skill yet</em><b id="cold-n">steps 0</b></figcaption>
+        <pre id="pane-cold" aria-hidden="true"></pre>
+      </figure>
+      <figure class="pane learned">
+        <figcaption><span class="k"><i></i>skill reused</span><em>list_books(category)</em><b id="learned-n">steps 0</b></figcaption>
+        <pre id="pane-learned" aria-hidden="true"></pre>
+      </figure>
+    </div>
+    <p class="stage-note">Illustration of the mechanism, not a recording. Measured numbers below.</p>
+    <div class="strip" id="strip" aria-live="polite"></div>
   </div>
 
   <div id="offline-banner" class="banner warn" hidden>
     <b>No live backend connected.</b>
     The agent needs a Python backend with Chromium. You can still <a href="#replay" id="to-replay">replay a recorded run</a> and explore the results, skills and architecture below, or enter your backend URL.
   </div>
+
+  <section id="keycard" class="keycard card" hidden>
+    <h2>Connect Backboard</h2>
+    <p>The agent uses Backboard as its LLM. Get a key at <a href="https://backboard.io" target="_blank" rel="noopener noreferrer">backboard.io</a> and paste it here. It is stored only on this machine's server (data/backboard_key) and is never sent anywhere except Backboard.</p>
+    <div class="row">
+      <label class="grow">Backboard API key
+        <input id="keyinput" type="password" autocomplete="off" spellcheck="false" placeholder="paste your key">
+      </label>
+      <button class="btn primary" id="btn-savekey" type="button">Save key</button>
+    </div>
+    <p class="small" id="key-status" role="status"></p>
+  </section>
 
   <details class="card conn" id="conn-card">
     <summary>Connection <span class="muted" id="conn-summary"></span></summary>
@@ -53,6 +84,7 @@
       </label>
     </div>
     <p class="muted small" id="health-detail"></p>
+    <button class="btn ghost danger small" id="btn-forgetkey" type="button" hidden>Forget saved key</button>
   </details>
 
   <div class="card">
@@ -135,7 +167,7 @@
 
 <!-- ============================== LEARNING ============================== -->
 <section id="tab-learning" class="panel" role="tabpanel" hidden>
-  <h1>Does it actually get better?</h1>
+  <h1 class="sec">Does it actually get better?</h1>
   <p class="lead">Each task family is run twice: <b>cold</b> (no skills, no memory, fresh start every task) and <b>learned</b> (skills and lessons carry over). Same tasks, same model.</p>
   <div id="bench-banner" class="banner info" hidden></div>
   <div id="bench-hero" class="stats"></div>
@@ -157,7 +189,7 @@
 
 <!-- ============================ SKILLS & MEMORY ============================ -->
 <section id="tab-library" class="panel" role="tabpanel" hidden>
-  <h1>Skills &amp; memory</h1>
+  <h1 class="sec">Skills &amp; memory</h1>
   <p class="lead">What the agent has learned so far. Skills are replayable procedures; memory holds lessons and notes recalled on future tasks.</p>
   <div id="lib-banner" class="banner info" hidden></div>
   <div class="row between wrap-r">
@@ -181,7 +213,7 @@
 
 <!-- ============================== ARCHITECTURE ============================== -->
 <section id="tab-arch" class="panel" role="tabpanel" hidden>
-  <h1>Architecture</h1>
+  <h1 class="sec">Architecture</h1>
   <p class="lead">A planner delegates browsing to a worker. Successful traces become skills; reflections become memory. Both feed the next run.</p>
   <div class="arch">
     <figure class="diagram">
@@ -206,13 +238,13 @@
         </g>
         <g class="nodes">
           <g class="n task"><rect x="185" y="10" width="160" height="36" rx="18"/><text x="265" y="33" text-anchor="middle" class="t">Your task</text></g>
-          <g class="n core"><rect x="150" y="80" width="220" height="64" rx="12"/><text x="260" y="107" text-anchor="middle" class="t">Planner</text><text x="260" y="127" text-anchor="middle" class="s">todos · scratch files · delegates</text></g>
+          <g class="n core"><rect x="150" y="80" width="220" height="64" rx="12"/><text x="260" y="107" text-anchor="middle" class="t">Planner</text><text x="260" y="127" text-anchor="middle" class="s">todos, scratch files, delegation</text></g>
           <g class="n mem"><rect x="10" y="80" width="110" height="64" rx="12"/><text x="65" y="107" text-anchor="middle" class="t">Memory</text><text x="65" y="127" text-anchor="middle" class="s">Backboard</text></g>
           <g class="n lib"><rect x="395" y="80" width="100" height="64" rx="12"/><text x="445" y="107" text-anchor="middle" class="t">Skill library</text><text x="445" y="127" text-anchor="middle" class="s">replayable</text></g>
-          <g class="n core"><rect x="150" y="200" width="220" height="64" rx="12"/><text x="260" y="227" text-anchor="middle" class="t">Worker</text><text x="260" y="247" text-anchor="middle" class="s">observe → think → act loop</text></g>
+          <g class="n core"><rect x="150" y="200" width="220" height="64" rx="12"/><text x="260" y="227" text-anchor="middle" class="t">Worker</text><text x="260" y="247" text-anchor="middle" class="s">observe, think, act</text></g>
           <g class="n learnbox"><rect x="10" y="200" width="110" height="64" rx="12"/><text x="65" y="227" text-anchor="middle" class="t">Reflector</text><text x="65" y="247" text-anchor="middle" class="s">lessons</text></g>
-          <g class="n learnbox"><rect x="395" y="200" width="100" height="64" rx="12"/><text x="445" y="227" text-anchor="middle" class="t">Skill builder</text><text x="445" y="247" text-anchor="middle" class="s">trace → skill</text></g>
-          <g class="n browser"><rect x="60" y="320" width="400" height="64" rx="12"/><text x="260" y="347" text-anchor="middle" class="t">Browser</text><text x="260" y="367" text-anchor="middle" class="s">Playwright · Chromium · domain allowlist · safety</text></g>
+          <g class="n learnbox"><rect x="395" y="200" width="100" height="64" rx="12"/><text x="445" y="227" text-anchor="middle" class="t">Skill builder</text><text x="445" y="247" text-anchor="middle" class="s">trace to skill</text></g>
+          <g class="n browser"><rect x="60" y="320" width="400" height="64" rx="12"/><text x="260" y="347" text-anchor="middle" class="t">Browser</text><text x="260" y="367" text-anchor="middle" class="s">Playwright, Chromium, domain allowlist, safety checks</text></g>
           <g class="n task"><rect x="190" y="440" width="140" height="36" rx="18"/><text x="260" y="463" text-anchor="middle" class="t">The web</text></g>
         </g>
       </svg>
@@ -231,10 +263,13 @@
 
 </main>
 
-<footer class="wrap foot muted small">
-  WebForge. Agent output is untrusted: everything shown here is rendered as plain text.
+<footer class="wrap foot">
+  <pre class="ascii-foot" aria-hidden="true">  ┌─ observe ─▸ act ─▸ trace ─▸ skill ─▸ replay ─┐
+  └──────────────────── lessons ◂────────────────┘</pre>
+  <p class="muted small">Agent output is untrusted, so everything on this page is rendered as plain text.</p>
 </footer>
 <noscript><p class="wrap">This page needs JavaScript.</p></noscript>
 <script src="app.js"></script>
+<script src="fx.js"></script>
 </body>
 </html>

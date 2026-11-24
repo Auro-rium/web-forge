@@ -56,7 +56,7 @@ async function fetchJSON(url, opts = {}, timeout = 8000) {
     const ct = r.headers.get('content-type') || '';
     if (!ct.includes('json')) throw new Error('not a JSON response');
     const body = await r.json();
-    if (!r.ok) { const e = new Error(body.detail || ('HTTP ' + r.status)); e.status = r.status; throw e; }
+    if (!r.ok) { const e = new Error(body.detail || body.error || ('HTTP ' + r.status)); e.status = r.status; throw e; }
     return body;
   } finally { clearTimeout(t); }
 }
@@ -115,7 +115,44 @@ function renderConn() {
       (h.needs_code ? ' Access code required to run.' : '')
     : (S.base ? 'Could not reach ' + S.base + ' (is it running, and does WEBFORGE_CORS_ORIGINS include this site?).' : '');
   $('#replay-det').open = !S.online || $('#replay-det').open;
+  renderKeyCard();
   updateRunButton();
+}
+
+// ----------------------------------------------------- backboard key setup ---
+const needsKey = () => !!(S.online && S.health && S.health.needs_key);
+function renderKeyCard() {
+  $('#keycard').hidden = !needsKey();
+  $('#btn-forgetkey').hidden = !(S.online && S.health && S.health.key_source === 'saved');
+}
+function setKeyStatus(text) { $('#key-status').textContent = text || ''; }
+async function saveKey() {
+  const input = $('#keyinput');
+  const key = input.value.trim();
+  if (!key) { setKeyStatus('Paste your Backboard API key first.'); return; }
+  const btn = $('#btn-savekey');
+  btn.disabled = true;
+  setKeyStatus('Checking the key with Backboard...');
+  try {
+    await api('/api/settings/key', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ api_key: key }),
+    }, 30000);
+    input.value = '';
+    setKeyStatus('Key saved. You can run the agent now.');
+    await connect();
+  } catch (e) {
+    setKeyStatus(e.status === 403 ? 'Not allowed: ' + e.message : (e.message || 'Could not save the key.'));
+  } finally { btn.disabled = false; }
+}
+async function forgetKey() {
+  if (!confirm('Forget the saved Backboard key on this server?')) return;
+  try {
+    await api('/api/settings/key', { method: 'DELETE', headers: authHeaders() });
+    setKeyStatus('');
+    await connect();
+  } catch (e) { alert('Could not forget the key: ' + e.message); }
 }
 
 function updateRunButton() {
@@ -123,7 +160,8 @@ function updateRunButton() {
   const hint = $('#run-hint');
   b.disabled = S.running || !S.online || ($('#task').value.trim() === '');
   b.textContent = S.running ? 'Running...' : 'Run agent';
-  if (!S.online) hint.textContent = 'Connect a backend to run the agent live. Until then, use the replay below.';
+  if (needsKey()) { b.disabled = true; hint.textContent = 'Add your Backboard key first'; }
+  else if (!S.online) hint.textContent = 'Connect a backend to run the agent live. Until then, use the replay below.';
   else if (S.health && S.health.browser === false) hint.textContent = 'The backend reports no browser; runs will fail.';
   else if (S.health && S.health.needs_code && !S.code) hint.textContent = 'This backend needs an access code (see Connection).';
   else hint.textContent = '';
@@ -290,7 +328,7 @@ async function startRun() {
     });
     const body = await r.json().catch(() => ({}));
     if (!r.ok) {
-      const msg = typeof body.detail === 'string' ? body.detail : (r.status === 422 ? 'Invalid task.' : 'HTTP ' + r.status);
+      const msg = typeof body.detail === 'string' ? body.detail : (typeof body.error === 'string' ? body.error : (r.status === 422 ? 'Invalid task.' : 'HTTP ' + r.status));
       hint.textContent = (r.status === 401 ? 'Access code missing or wrong. ' : '') + msg;
       S.running = false; updateRunButton();
       return;
@@ -451,7 +489,7 @@ function renderBench(data, fromApi) {
     const r = reduction(c, l);
     return el('div', { class: 'stat' },
       el('div', { class: 'big' + (r < -0.5 ? ' neg' : '') }, Math.abs(r) < 0.5 ? '0%' : (r >= 0 ? '−' : '+') + Math.abs(r).toFixed(0) + '%'),
-      el('div', { class: 'l' }, label), el('div', { class: 'sub' }, fmt(c) + ' → ' + fmt(l) + ' per task'));
+      el('div', { class: 'l' }, label), el('div', { class: 'sub' }, 'from ' + fmt(c) + ' to ' + fmt(l) + ' per task'));
   };
   hero.append(heroItem('Steps', all.ca.steps, all.la.steps, (v) => v.toFixed(1)),
     heroItem('Tokens', all.ca.tokens, all.la.tokens, kfmt),
@@ -519,7 +557,7 @@ function extractNode(x) {
   if (!x) return null;
   if (x.type === 'css') {
     const f = Object.keys(x.fields || {}).join(', ');
-    return el('li', null, el('span', { class: 'act' }, 'extract'), ' every ', withParams(x.selector), f ? ' → ' + f : '');
+    return el('li', null, el('span', { class: 'act' }, 'extract'), ' every ', withParams(x.selector), f ? ', fields: ' + f : '');
   }
   return el('li', null, el('span', { class: 'act' }, 'extract'), ' page text');
 }
@@ -613,6 +651,9 @@ function init() {
   $('#backend').addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(); });
   $('#task').addEventListener('input', onTaskInput);
   $('#btn-run').addEventListener('click', startRun);
+  $('#btn-savekey').addEventListener('click', saveKey);
+  $('#keyinput').addEventListener('keydown', (e) => { if (e.key === 'Enter') saveKey(); });
+  $('#btn-forgetkey').addEventListener('click', forgetKey);
   $('#code').addEventListener('input', () => { S.code = $('#code').value; updateRunButton(); });
   $('#mem-filter').addEventListener('change', renderMemory);
   $('#btn-play').addEventListener('click', () => (Player.playing ? Player.pause() : Player.play()));
