@@ -23,8 +23,8 @@ dependencies = [
 
 
 [project.urls]
-Homepage = "https://github.com/Auro-rium/webforge"
-Repository = "https://github.com/Auro-rium/webforge"
+Homepage = "https://github.com/Auro-rium/web-forge"
+Repository = "https://github.com/Auro-rium/web-forge"
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "pytest-asyncio>=0.23", "ruff"]

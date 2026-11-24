@@ -46,7 +46,7 @@ Nothing about the model changes; the improvement comes from stored skills and re
 ## Docker (recommended for a first run)
 
 ```bash
-git clone https://github.com/Auro-rium/webforge.git && cd webforge
+git clone https://github.com/Auro-rium/web-forge.git && cd web-forge
 docker compose up --build
 ```
 
