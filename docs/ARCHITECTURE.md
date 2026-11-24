@@ -196,7 +196,7 @@ After each run with `learn=True` the reflector (`reflector` role, JSON output) r
 | Spend cap | `llm._guard` | See section 9. |
 | Server | `server.py` | Optional `WEBFORGE_ACCESS_CODE` (constant-time compare) for starting runs and destructive endpoints; destructive endpoints are loopback-only when no code is set; CORS closed by default when a code is set; task length 500 chars; one run at a time (HTTP 409). |
 
-Limits of the model: the allowlist is checked on `goto`, not on every network request, so a click that follows a link or redirect to another host is not blocked by it; the risky-click and sensitive-field checks are regex heuristics on visible names; `safety.redact()` exists but is not currently wired into logging.
+Limits of the model: the allowlist is checked on `goto`, not on every network request, so a click that follows a link or redirect to another host is not blocked by it; the risky-click and sensitive-field checks are regex heuristics on visible names. Run errors are scrubbed of the Backboard key before they are stored or shown.
 
 ## 9. Cost control
 
@@ -231,7 +231,7 @@ Limits of the model: the allowlist is checked on `goto`, not on every network re
 * Demotion is permanent (no re-promotion); the planner picks skills from natural-language descriptions, so it can choose a poorly fitting one.
 * One browser tab context; no login, payment, file upload/download, CAPTCHA or iframe-specific handling.
 * Small models sometimes answer in prose instead of calling a tool; the nudge mechanism mitigates but does not eliminate this.
-* `serve --headed` (or `WEBFORGE_HEADED=1`) shows the real browser window for live demos; `run --headed` does the same for the CLI. `Config.headless` itself is not read by the server, which checks the environment variable.
+* `serve --headed` (or `WEBFORGE_HEADED=1`) shows the real browser window for live demos; `run --headed` does the same for the CLI.
 * Local-only state: skills, memory mirror and ledger live under `data/`; on ephemeral hosts they reset unless a disk is mounted.
 
 ## 12. Future work
@@ -239,6 +239,6 @@ Limits of the model: the allowlist is checked on `goto`, not on every network re
 * Parameter-type inference and skill composition (one skill calling another).
 * Skill promotion after repair, and success-rate tracking per version.
 * Stronger answer checkers (ground-truth data per task) and larger benchmarks with confidence intervals.
-* Network-level allowlist enforcement (request interception) and wiring `redact()` into logs.
+* Network-level allowlist enforcement (request interception) and secret redaction in logs.
 * Multiple concurrent runs with isolated browser contexts and a locked ledger.
 * Vision fallback for pages without useful accessible names.
