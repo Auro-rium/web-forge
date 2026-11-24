@@ -7,7 +7,6 @@ import dataclasses
 import json
 import sys
 import time
-from pathlib import Path
 
 
 def _build_parser() -> argparse.ArgumentParser:

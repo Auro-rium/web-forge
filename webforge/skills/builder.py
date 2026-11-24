@@ -4,10 +4,10 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Optional
+from typing import Optional
 from urllib.parse import urlparse
 
-from webforge.contracts import Skill, SkillStep, TraceStep, fill_template
+from webforge.contracts import Skill, SkillStep, TraceStep
 from webforge.skills.library import SkillLibrary
 from webforge.skills.replay import run_skill
 

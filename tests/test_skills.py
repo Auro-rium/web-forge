@@ -71,7 +71,6 @@ def test_library(tmp_path):
     assert lib.get("a").domain == "books.toscrape.com"
     assert lib.get("zzz") is None
     assert [s.name for s in lib.list("books.toscrape.com")] == ["a"]
-    assert [s.name for s in lib.find_for_url("https://books.toscrape.com/x")] == ["a"]
     lib.record_use("a", True)
     for _ in range(3):
         lib.record_use("a", False)

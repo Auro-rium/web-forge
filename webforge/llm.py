@@ -4,12 +4,11 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Optional
 
 from .config import Config
 from .contracts import LLMReply, ToolCall
 
-ROLES = ("planner", "worker", "builder", "reflector")
 
 
 # ------------------------------------------------------------------ helpers ---
@@ -259,7 +258,6 @@ class MockLLM:
         self.log: list[dict] = []     # every call, for assertions
         self._tid = 0
         self._cid = 0
-        self._threads_by_role: dict[str, str] = {}
 
     def _to_reply(self, r: Any, thread_id: str, tokens: int) -> LLMReply:
         if isinstance(r, LLMReply):

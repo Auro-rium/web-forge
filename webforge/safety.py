@@ -56,11 +56,3 @@ def check_action(action: str, args: dict, elements: Optional[list], allowed_doma
             return False, f"clicking '{el.name}' is blocked (checkout/payment/login/account deletion)"
     return True, ""
 
-
-def redact(text: Any, limit: int = 0) -> str:
-    """Mask obvious secrets (card numbers, bearer tokens, api keys, passwords) in text."""
-    s = str(text)
-    s = re.sub(r"\b(?:\d[ -]?){13,19}\b", "[REDACTED-NUMBER]", s)
-    s = re.sub(r"(?i)\b(bearer|token|api[_-]?key|password|secret)\b(\s*[:=]\s*)\S+", r"\1\2[REDACTED]", s)
-    s = re.sub(r"\b(sk|pk|rk)-[A-Za-z0-9_-]{12,}\b", "[REDACTED-KEY]", s)
-    return s[:limit] if limit else s

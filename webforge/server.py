@@ -213,7 +213,6 @@ class Run:
         self.req = req
         self.status = "running"          # running | done | error
         self.events: list[dict] = []
-        self.dropped = 0
         self.result: Optional[dict] = None
         self.error: Optional[str] = None
         self.started = time.time()
@@ -244,7 +243,6 @@ async def _push(run: Run, kind: str, data: dict) -> None:
     if len(run.events) >= MAX_EVENTS:
         # keep the first/last events useful: drop the oldest non-terminal one
         run.events.pop(1 if len(run.events) > 1 else 0)
-        run.dropped += 1
     run.events.append(ev)
     async with run.cond:
         run.cond.notify_all()

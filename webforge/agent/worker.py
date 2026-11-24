@@ -7,7 +7,6 @@ from typing import Any, Callable, Optional
 from urllib.parse import urlparse
 
 from webforge.agent.prompts import WORKER_SYSTEM, WORKER_TOOLS
-from webforge.contracts import TraceStep
 from webforge.safety import check_action
 
 ACTIONS = {"goto", "click", "type", "select", "press", "scroll", "back", "extract"}

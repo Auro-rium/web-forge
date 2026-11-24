@@ -28,7 +28,6 @@ class Config:
     ledger_file: Path = field(default_factory=lambda: Path(os.getenv("WEBFORGE_LEDGER", ROOT / "data" / "spend.json")))
     worker_max_steps: int = int(os.getenv("WEBFORGE_WORKER_STEPS", "25"))
     planner_max_steps: int = int(os.getenv("WEBFORGE_PLANNER_STEPS", "30"))
-    headless: bool = os.getenv("WEBFORGE_HEADED", "0") != "1"
     chromium_path: str = field(default_factory=lambda: os.getenv(
         "WEBFORGE_CHROMIUM", "/opt/pw-browsers/chromium" if Path("/opt/pw-browsers/chromium").exists() else ""))
     allowed_domains: list[str] = field(default_factory=lambda: [d.strip() for d in os.getenv(

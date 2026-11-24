@@ -92,5 +92,3 @@ class SkillLibrary:
             )
         return "\n".join(lines)
 
-    def find_for_url(self, url: str) -> list[Skill]:
-        return self.list(domain=_hostname(url) or url)
