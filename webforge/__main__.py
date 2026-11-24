@@ -44,6 +44,10 @@ def _build_parser() -> argparse.ArgumentParser:
     rp = bs.add_parser("report")
     rp.add_argument("cold"); rp.add_argument("learned")
 
+    w = sub.add_parser("serve", help="web UI + API server")
+    w.add_argument("--port", type=int, default=8000)
+    w.add_argument("--host", default="127.0.0.1")
+
     f = sub.add_parser("serve-fixtures", help="serve the offline demo site")
     f.add_argument("--port", type=int, default=8765)
     return p
@@ -178,6 +182,10 @@ def main(argv=None) -> int:
         return asyncio.run(_cmd_memory(args))
     if args.cmd == "bench":
         return asyncio.run(_cmd_bench(args))
+    if args.cmd == "serve":
+        from webforge.server import serve
+        serve(args.host, args.port)
+        return 0
     if args.cmd == "serve-fixtures":
         return _cmd_serve(args)
     return 1

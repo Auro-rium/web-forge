@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: webforge-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter            # Chromium needs >= 1 GB RAM; the free tier is too small
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: BACKBOARD_API_KEY
+        sync: false          # set in the Render dashboard, never commit it
+      - key: WEBFORGE_ACCESS_CODE
+        sync: false          # required to start runs; share it only with people you trust
+      - key: WEBFORGE_CORS_ORIGINS
+        sync: false          # e.g. https://your-site.vercel.app (comma separated)
+      - key: WEBFORGE_BUDGET_USD
+        value: "3"
+      - key: WEBFORGE_CHROMIUM
+        value: ""
+    # Skills/memory/spend live in /app/data. Without a disk they reset on every deploy.
+    # Persistent disks need a paid plan; uncomment to keep them:
+    # disk:
+    #   name: webforge-data
+    #   mountPath: /app/data
+    #   sizeGB: 1

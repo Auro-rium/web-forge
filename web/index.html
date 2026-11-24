@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>WebForge - a self-improving web agent</title>
+<meta name="description" content="Watch a web-browsing deep agent learn reusable skills and get faster, cheaper and more reliable with every task.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232f6df6'/%3E%3Cpath d='M9 10l3 12 4-9 4 9 3-12' fill='none' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap top-in">
+    <a class="brand" href="#run" aria-label="WebForge home">
+      <span class="logo" aria-hidden="true"></span><span>WebForge</span>
+    </a>
+    <nav class="tabs" id="tabs" role="tablist" aria-label="Sections">
+      <button role="tab" data-tab="run" aria-selected="true">Run</button>
+      <button role="tab" data-tab="learning" aria-selected="false">Learning</button>
+      <button role="tab" data-tab="library" aria-selected="false">Skills &amp; Memory</button>
+      <button role="tab" data-tab="arch" aria-selected="false">Architecture</button>
+    </nav>
+    <span class="pill" id="conn-pill" title="Backend connection"><i class="dot"></i><span id="conn-text">checking...</span></span>
+  </div>
+</header>
+
+<main class="wrap">
+
+<!-- ================================ RUN ================================ -->
+<section id="tab-run" class="panel" role="tabpanel">
+  <div class="hero">
+    <h1>An agent that gets better every time it browses.</h1>
+    <p class="lead">Give it a web task. It plans, browses, then turns what worked into a reusable <b>skill</b> and writes down <b>lessons</b>. The next similar task skips the exploration.</p>
+  </div>
+
+  <div id="offline-banner" class="banner warn" hidden>
+    <b>No live backend connected.</b>
+    The agent needs a Python backend with Chromium. You can still <a href="#replay" id="to-replay">replay a recorded run</a> and explore the results, skills and architecture below, or enter your backend URL.
+  </div>
+
+  <details class="card conn" id="conn-card">
+    <summary>Connection <span class="muted" id="conn-summary"></span></summary>
+    <div class="row">
+      <label class="grow">Backend URL <span class="muted">(empty = this site)</span>
+        <input id="backend" type="url" inputmode="url" placeholder="https://your-webforge-backend.onrender.com" autocomplete="off" spellcheck="false">
+      </label>
+      <button class="btn" id="btn-connect" type="button">Connect</button>
+    </div>
+    <div class="row" id="code-row" hidden>
+      <label class="grow">Access code <span class="muted">(required by this backend)</span>
+        <input id="code" type="password" autocomplete="off" placeholder="access code">
+      </label>
+    </div>
+    <p class="muted small" id="health-detail"></p>
+  </details>
+
+  <div class="card">
+    <h2>Task</h2>
+    <div id="chips" class="chips" aria-label="Example tasks"></div>
+    <textarea id="task" rows="3" maxlength="500" placeholder="e.g. List the titles and prices of the 3 cheapest books in the 'Poetry' category on https://books.toscrape.com"></textarea>
+    <div class="row between wrap-r">
+      <div class="toggles">
+        <label class="tog"><input type="checkbox" id="opt-learn" checked><span>Learn</span></label>
+        <label class="tog"><input type="checkbox" id="opt-skills" checked><span>Use skills</span></label>
+        <label class="tog"><input type="checkbox" id="opt-memory" checked><span>Use memory</span></label>
+      </div>
+      <div class="row">
+        <span class="muted small" id="charcount">0/500</span>
+        <button class="btn primary" id="btn-run" type="button">Run agent</button>
+      </div>
+    </div>
+    <p class="muted small" id="run-hint"></p>
+  </div>
+
+  <div id="live" class="live" hidden>
+    <div class="live-head">
+      <h2 id="live-title">Live run</h2>
+      <span class="badge" id="live-status">idle</span>
+      <span class="muted mono" id="live-clock">0.0s</span>
+    </div>
+    <p class="task-line" id="live-task"></p>
+    <div class="live-grid">
+      <div class="col">
+        <div class="card">
+          <h3>Plan</h3>
+          <ul id="todos" class="todos"><li class="muted">waiting for the plan...</li></ul>
+        </div>
+        <div class="card">
+          <h3>Skills</h3>
+          <div id="skill-chips" class="chips"><span class="muted small">none yet</span></div>
+        </div>
+        <div class="card">
+          <h3>Memory</h3>
+          <div id="mem-hits" class="mem-hits muted small">no memory recalled</div>
+          <ul id="lessons" class="lessons"></ul>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card">
+          <h3>Activity</h3>
+          <ol id="timeline" class="timeline" aria-live="polite"></ol>
+        </div>
+      </div>
+    </div>
+    <div class="card answer" id="answer-card" hidden>
+      <h3>Final answer <span class="badge" id="answer-badge"></span></h3>
+      <pre id="answer" class="answer-text"></pre>
+    </div>
+    <div class="metrics" id="metrics"></div>
+  </div>
+
+  <div class="card" id="replay">
+    <details id="replay-det">
+      <summary><b>Replay a recorded run</b> <span class="muted small">(works without a backend)</span></summary>
+      <div class="row wrap-r replay-ctl">
+        <label>Run
+          <select id="demo-select"></select>
+        </label>
+        <button class="btn" id="btn-play" type="button">Play</button>
+        <button class="btn ghost" id="btn-restart" type="button">Restart</button>
+        <label>Speed
+          <select id="demo-speed">
+            <option value="0.5">0.5x</option>
+            <option value="1" selected>1x</option>
+            <option value="2">2x</option>
+            <option value="4">4x</option>
+          </select>
+        </label>
+      </div>
+      <p class="muted small" id="demo-note"></p>
+    </details>
+  </div>
+</section>
+
+<!-- ============================== LEARNING ============================== -->
+<section id="tab-learning" class="panel" role="tabpanel" hidden>
+  <h1>Does it actually get better?</h1>
+  <p class="lead">Each task family is run twice: <b>cold</b> (no skills, no memory, fresh start every task) and <b>learned</b> (skills and lessons carry over). Same tasks, same model.</p>
+  <div id="bench-banner" class="banner info" hidden></div>
+  <div id="bench-hero" class="stats"></div>
+  <div id="bench-charts" class="charts"></div>
+  <div class="card">
+    <h3>Per task</h3>
+    <div class="table-wrap"><table id="bench-table" class="tbl"></table></div>
+  </div>
+  <div class="card explain">
+    <h3>How the learning loop works</h3>
+    <ol class="loop">
+      <li><b>Explore.</b> On a new kind of task the worker drives the browser step by step with an LLM and the page's interactive elements.</li>
+      <li><b>Distil.</b> Every action is recorded with a robust locator. A builder turns a successful trace into a parameterised skill, for example <code>list_books(category)</code>, and checks it replays.</li>
+      <li><b>Remember.</b> A reflector stores short lessons (site structure, pitfalls) in long-term memory.</li>
+      <li><b>Reuse.</b> Next time the planner sees the skill catalog and the recalled lessons. A matching skill runs without any browsing LLM calls; failures fall back to exploring and repair the skill.</li>
+    </ol>
+  </div>
+</section>
+
+<!-- ============================ SKILLS & MEMORY ============================ -->
+<section id="tab-library" class="panel" role="tabpanel" hidden>
+  <h1>Skills &amp; memory</h1>
+  <p class="lead">What the agent has learned so far. Skills are replayable procedures; memory holds lessons and notes recalled on future tasks.</p>
+  <div id="lib-banner" class="banner info" hidden></div>
+  <div class="row between wrap-r">
+    <h2>Skills <span class="muted" id="skills-count"></span></h2>
+    <button class="btn ghost danger" id="btn-reset-mem" type="button" hidden>Reset memory</button>
+  </div>
+  <div id="skills" class="cards"></div>
+  <div class="row between wrap-r">
+    <h2>Memory <span class="muted" id="mem-count"></span></h2>
+    <label class="inline">Show
+      <select id="mem-filter">
+        <option value="">everything</option>
+        <option value="lesson">lessons</option>
+        <option value="skill">skill notes</option>
+        <option value="failure">failures</option>
+      </select>
+    </label>
+  </div>
+  <div id="memory" class="cards one"></div>
+</section>
+
+<!-- ============================== ARCHITECTURE ============================== -->
+<section id="tab-arch" class="panel" role="tabpanel" hidden>
+  <h1>Architecture</h1>
+  <p class="lead">A planner delegates browsing to a worker. Successful traces become skills; reflections become memory. Both feed the next run.</p>
+  <div class="arch">
+    <figure class="diagram">
+      <svg id="arch-svg" viewBox="0 0 530 500" role="img" aria-labelledby="arch-t arch-d">
+        <title id="arch-t">WebForge architecture</title>
+        <desc id="arch-d">A task goes to the planner. The planner delegates browsing to the worker, which drives the browser. Worker traces go to the skill builder and then to the skill library; the reflector writes lessons to memory; the planner reads both.</desc>
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="arrowhead"/></marker>
+        </defs>
+        <g class="edges">
+          <path d="M265 46V80" marker-end="url(#ah)"/>
+          <path d="M150 112H122" marker-end="url(#ah)" marker-start="url(#ah)"/>
+          <path d="M370 112H395" marker-end="url(#ah)" marker-start="url(#ah)"/>
+          <path d="M260 144V200" marker-end="url(#ah)"/>
+          <path d="M260 264V320" marker-end="url(#ah)" marker-start="url(#ah)"/>
+          <path d="M260 384V440" marker-end="url(#ah)"/>
+          <path d="M370 232H395" marker-end="url(#ah)"/>
+          <path d="M445 200V144" marker-end="url(#ah)" class="learn"/>
+          <path d="M150 232H120" marker-end="url(#ah)"/>
+          <path d="M65 200V144" marker-end="url(#ah)" class="learn"/>
+          <path d="M495 112H512V352H462" marker-end="url(#ah)" class="learn dashed"/>
+        </g>
+        <g class="nodes">
+          <g class="n task"><rect x="185" y="10" width="160" height="36" rx="18"/><text x="265" y="33" text-anchor="middle" class="t">Your task</text></g>
+          <g class="n core"><rect x="150" y="80" width="220" height="64" rx="12"/><text x="260" y="107" text-anchor="middle" class="t">Planner</text><text x="260" y="127" text-anchor="middle" class="s">todos · scratch files · delegates</text></g>
+          <g class="n mem"><rect x="10" y="80" width="110" height="64" rx="12"/><text x="65" y="107" text-anchor="middle" class="t">Memory</text><text x="65" y="127" text-anchor="middle" class="s">Backboard</text></g>
+          <g class="n lib"><rect x="395" y="80" width="100" height="64" rx="12"/><text x="445" y="107" text-anchor="middle" class="t">Skill library</text><text x="445" y="127" text-anchor="middle" class="s">replayable</text></g>
+          <g class="n core"><rect x="150" y="200" width="220" height="64" rx="12"/><text x="260" y="227" text-anchor="middle" class="t">Worker</text><text x="260" y="247" text-anchor="middle" class="s">observe → think → act loop</text></g>
+          <g class="n learnbox"><rect x="10" y="200" width="110" height="64" rx="12"/><text x="65" y="227" text-anchor="middle" class="t">Reflector</text><text x="65" y="247" text-anchor="middle" class="s">lessons</text></g>
+          <g class="n learnbox"><rect x="395" y="200" width="100" height="64" rx="12"/><text x="445" y="227" text-anchor="middle" class="t">Skill builder</text><text x="445" y="247" text-anchor="middle" class="s">trace → skill</text></g>
+          <g class="n browser"><rect x="60" y="320" width="400" height="64" rx="12"/><text x="260" y="347" text-anchor="middle" class="t">Browser</text><text x="260" y="367" text-anchor="middle" class="s">Playwright · Chromium · domain allowlist · safety</text></g>
+          <g class="n task"><rect x="190" y="440" width="140" height="36" rx="18"/><text x="260" y="463" text-anchor="middle" class="t">The web</text></g>
+        </g>
+      </svg>
+    </figure>
+    <ol class="captions">
+      <li><b>Planner</b> keeps a todo list and scratch files, recalls lessons, checks the skill catalog and decides what to delegate.</li>
+      <li><b>Worker</b> sees a compact view of the page (interactive elements and text) and acts one step at a time.</li>
+      <li><b>Browser</b> executes actions in headless Chromium. Navigation off the allowlist and risky actions (passwords, purchases) are blocked.</li>
+      <li><b>Skill builder</b> converts a successful action trace into a parameterised, replayable skill and verifies it.</li>
+      <li><b>Skill library</b> stores skills. The planner runs one with <code>run_skill</code>, replaying it with zero browsing LLM calls (dashed line).</li>
+      <li><b>Reflector</b> distils what worked and what failed into short lessons.</li>
+      <li><b>Memory</b> (Backboard, with a local mirror) recalls those lessons at the start of related tasks.</li>
+    </ol>
+  </div>
+</section>
+
+</main>
+
+<footer class="wrap foot muted small">
+  WebForge. Agent output is untrusted: everything shown here is rendered as plain text.
+</footer>
+<noscript><p class="wrap">This page needs JavaScript.</p></noscript>
+<script src="app.js"></script>
+</body>
+</html>
