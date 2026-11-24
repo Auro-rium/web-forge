@@ -169,3 +169,27 @@ def fill_template(value: Any, params: dict) -> Any:
     if isinstance(value, list):
         return [fill_template(v, params) for v in value]
     return value
+
+
+# ------------------------------------------------------------------ agent ---
+
+@dataclass
+class RunResult:
+    """Returned by webforge.agent.planner.run_task()."""
+    task: str
+    answer: str                      # final answer text from the planner
+    ok: bool                         # planner called final_answer (not budget exhausted / crashed)
+    steps: int = 0                   # total browser actions executed (worker act() calls + skill steps)
+    llm_calls: int = 0
+    tokens: int = 0
+    cost_usd: float = 0.0
+    seconds: float = 0.0
+    skills_used: list = field(default_factory=list)      # names of skills executed via run_skill
+    skills_created: list = field(default_factory=list)   # names of skills built after this run
+    notes: dict = field(default_factory=dict)            # workspace files {filename: content}
+
+
+# Event callback used for the live UI. Signature: on_event(kind: str, data: dict) -> None
+# kinds: "task_start", "todos" {todos}, "delegate" {subtask}, "skill_run" {name, params}, "skill_result" {name, ok, message},
+#        "observe" {url, n_elements}, "action" {action, args, ok, message}, "memory_hits" {text},
+#        "skill_built" {name}, "lesson" {text}, "final" {answer}, "warn" {message}
