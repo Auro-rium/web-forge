@@ -353,3 +353,4 @@ a.btn { text-decoration: none; display: inline-block; }
 #btn-resume { border-color: var(--learn); color: var(--learn); }
 #btn-resume:hover:not(:disabled) { background: var(--learn); color: var(--on-accent); }
 @media (max-width: 560px) { .ask-items .ibody { flex: 1 1 100%; order: 3; } }
+.ask-pill { width: max-content; max-width: calc(100vw - 32px); white-space: nowrap; }

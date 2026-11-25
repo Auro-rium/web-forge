@@ -491,7 +491,15 @@ const Asks = {
       }
       c.n = n;
     }
-    if (fresh && isNew && this.map.size === 1) fresh.root.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (fresh && isNew && this.map.size === 1) {
+      // a burst of asks (and the page's own scroll to the live panel) may still be moving things: settle, then reveal the first card
+      clearTimeout(this.revealT);
+      this.revealT = setTimeout(() => {
+        const c = $('#asks .ask'); if (!c) return;
+        const r = c.getBoundingClientRect(), top = $('.top').getBoundingClientRect().bottom;
+        if (r.top < top || r.top > innerHeight * 0.6) c.scrollIntoView({ behavior: 'auto', block: 'start' });
+      }, 900);
+    }
     const pill = $('#ask-pill');
     if (pill) {
       const total = this.map.size, onlyAppr = Array.from(this.map.values()).every((a) => a.kind === 'approval' || a.legacy);
