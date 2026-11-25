@@ -278,3 +278,8 @@ h3 { font: 600 .95rem var(--disp); color: var(--fg); }
 .strip .t, .metric .l, .stat .l { font: 500 .82rem var(--disp); color: var(--dim); }
 .btn.primary { background: linear-gradient(180deg, #b6c4ff, #8ea2fb); border-color: #a9b8ff; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), 0 8px 24px -10px var(--glow); }
 @media (prefers-reduced-motion: reduce) { body::after { animation: none; } }
+
+/* parallel sub-agent lanes */
+.timeline .lane { display: inline-block; margin-right: 8px; padding: 0 6px; border-radius: 4px; font-size: .72rem; border: 1px solid currentColor; opacity: .9; }
+.timeline .lane-1 { color: #8fb8ff; } .timeline .lane-2 { color: #e0b26b; } .timeline .lane-3 { color: #9fd8a5; }
+.timeline .lane-4 { color: #d99bd6; } .timeline .lane-5 { color: #79d1d1; } .timeline .lane-0 { color: #e58f8f; }

@@ -103,3 +103,47 @@ def test_allowed_domains_default_is_open_web(monkeypatch):
     assert Config().allowed_domains == []
     monkeypatch.setenv("WEBFORGE_ALLOWED_DOMAINS", "a.com, b.org")
     assert Config().allowed_domains == ["a.com", "b.org"]
+
+
+def test_memory_relevance_drops_unrelated_lessons():
+    from webforge.memory import relevant
+    hits = [
+        {"content": "Category pages list books on a single page when under 20 items", "metadata": {"domain": "books.toscrape.com"}, "score": 0.93},
+        {"content": "Article URLs follow /wiki/Title; the infobox shows the stable release", "metadata": {"domain": "en.wikipedia.org"}, "score": 0.92},
+        {"content": "Hacker News comment pages show the top comment first as .comtr rows", "metadata": {"domain": "news.ycombinator.com"}, "score": 0.5},
+    ]
+    assert relevant("What is the weather in Paris right now?", hits) == []
+    got = relevant("cheapest poetry books on books.toscrape.com", hits)
+    assert [h["metadata"]["domain"] for h in got] == ["books.toscrape.com"]
+    got = relevant("top hacker news comment for the first story", hits)
+    assert got and got[0]["metadata"]["domain"] == "news.ycombinator.com"
+
+
+async def test_submit_sends_tool_results_as_message_on_same_thread(tmp_path, monkeypatch):
+    """Backboard leaves an empty turn after submit_tool_outputs; results go back via send_message instead."""
+    from types import SimpleNamespace
+    from webforge.config import Config
+    from webforge.llm import BackboardLLM
+    monkeypatch.delenv("WEBFORGE_TOOL_TRANSPORT", raising=False)
+    calls = []
+
+    class FakeClient:
+        async def send_message(self, content, **kw):
+            calls.append(("send", content, kw))
+            return SimpleNamespace(status="COMPLETED", content="done", tool_calls=[], thread_id="t1", messages=[])
+
+        async def submit_tool_outputs_simple(self, *a, **k):
+            calls.append(("submit", a, k))
+            raise AssertionError("native submit should not be used")
+
+    cfg = Config(data_dir=tmp_path, ledger_file=tmp_path / "spend.json", api_key="x")
+    llm = BackboardLLM(cfg)
+    llm._client = FakeClient()
+    llm._ids = {"planner": "a1"}
+    tools = [{"type": "function", "function": {"name": "final_answer"}}]
+    await llm.chat(role="planner", message="hi", system="SYS", tools=tools)
+    r = await llm.submit(role="planner", thread_id="t1", outputs=[{"tool_call_id": "c1", "output": "42"}])
+    assert r.text == "done"
+    kind, content, kw = calls[-1]
+    assert kind == "send" and "[c1]" in content and "42" in content
+    assert kw["thread_id"] == "t1" and kw["tools"] == tools and kw["system_prompt"] == "SYS"

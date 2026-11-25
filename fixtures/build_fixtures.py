@@ -29,3 +29,5 @@ people = {"Ada_Lovelace": "Ada Lovelace (1815-1852) was an English mathematician
 for k, v in people.items():
     (W / f"{k}.html").write_text(page(k.replace("_", " "), f"<h1>{k.replace('_',' ')}</h1><p class='summary'>{v}</p>"))
 print("fixtures built")
+
+# data/specs.html (table + JSON-LD + meta, for the generic extraction tools) is hand-written and checked in.

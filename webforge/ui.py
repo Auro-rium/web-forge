@@ -16,6 +16,9 @@ STYLES = {
     "delegate": ("cyan", "->"),
     "search": ("cyan", "?"),
     "nudge": ("dim", "…"),
+    "budget": ("yellow", "⏱"),
+    "parallel": ("bold cyan", "⇉"),
+    "read_urls": ("cyan", "▤"),
     "action": ("white", ">"),
     "skill_run": ("magenta", "#"),
     "skill_result": ("magenta", "#"),
@@ -35,10 +38,19 @@ def _trunc(s: Any, n: int = 100) -> str:
 
 def describe_event(kind: str, data: dict) -> str:
     d = data or {}
+    line = _describe(kind, d)
+    return f"[{d['agent']}] {line}" if d.get("agent") else line
+
+
+def _describe(kind: str, d: dict) -> str:
     if kind == "task_start":
         return _trunc(d.get("task", ""))
     if kind == "todos":
         return f"{len(d.get('todos') or [])} todos"
+    if kind == "parallel":
+        return f"parallel: {d.get('n')} sub-agents {', '.join(d.get('agents') or [])}"
+    if kind == "read_urls":
+        return f"read {len(d.get('urls') or [])} page(s): {_trunc(', '.join(d.get('urls') or []), 80)}"
     if kind == "search":
         return f"web search: {_trunc(d.get('query', ''))}"
     if kind == "delegate":

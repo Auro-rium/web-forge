@@ -8,15 +8,17 @@
 
 ## What it is
 
-WebForge is a planner/worker agent that drives a real Chromium browser through Playwright, using an LLM served by [Backboard](https://backboard.io). When a browsing subtask succeeds, WebForge compiles the recorded trace into a small parameterised JSON *skill*, checks it by replaying it, and saves it; the next similar task runs that skill with no browsing LLM. General questions (news, weather, facts, recommendations) are answered through Backboard's built-in web search first, so the agent handles everyday tasks, not only site automation. A reflector also stores short lessons in memory, and a hard dollar cap plus action-level safety checks (and an optional domain allowlist) keep runs cheap and contained. It comes with a live web UI, a CLI, an offline test suite, and a cold-vs-learned benchmark.
+WebForge is a general-purpose web agent: a planner that searches, reads and browses the open web, and fans work out to parallel browsing sub-agents, each in its own Chromium tab (Playwright), using an LLM served by [Backboard](https://backboard.io). When a browsing subtask succeeds, WebForge compiles the recorded trace into a small parameterised JSON *skill*, checks it by replaying it, and saves it; the next similar task runs that skill with no browsing LLM. Discovery goes through web search (several queries in parallel), known pages are read in parallel tabs with selector-free readers (main text, tables, links, JSON-LD), and large results are offloaded to workspace files so long tasks do not overflow the context. A reflector also stores short lessons in memory, and a hard dollar cap plus action-level safety checks (and an optional domain allowlist) keep runs cheap and contained. It comes with a live web UI, a CLI, an offline test suite, and a cold-vs-learned benchmark.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     U["User: CLI or web UI"] --> P["Planner"]
-    P -->|web_search| WS["Backboard web search"]
-    P -->|delegate_browse| W["Worker (fresh LLM thread per subtask)"]
+    P -->|"web_search (N queries)"| WS["Backboard web search"]
+    P -->|"read_urls (N tabs)"| RU["Readers: text, tables, links, JSON-LD"]
+    P -->|"delegate_browse / parallel_browse"| W["Workers: own LLM thread + own tab each"]
+    P <-->|offload / read_file| FS[("Run workspace files")]
     P -->|run_skill| R["Skill replay (no LLM)"]
     W --> B["Browser: Playwright + Chromium"]
     R --> B
@@ -104,6 +106,8 @@ Set via environment variables or `.env` (see [.env.example](.env.example)).
 | `WEBFORGE_DATA` / `WEBFORGE_RUNS` | `./data` / `./runs` | Skills, memory, state; run artefacts and benchmark JSONL. |
 | `WEBFORGE_LEDGER` | `./data/spend.json` | Spend ledger path. |
 | `WEBFORGE_WORKER_STEPS` / `WEBFORGE_PLANNER_STEPS` | `25` / `30` | Max browser actions per subtask / planner tool rounds per run. |
+| `WEBFORGE_PARALLEL` | `4` | Max concurrent sub-agents, tabs or search queries per tool call. |
+| `WEBFORGE_OBS_TEXT` | `4000` | Page-text characters per worker observation (`read(offset)` pages through the rest). |
 | `BACKBOARD_BASE_URL` | `https://app.backboard.io/api` | Backboard endpoint. |
 | `WEBFORGE_HEADED` | `0` | `1` shows the real browser window. `serve --headed` and `run --headed` set it for you. |
 | `WEBFORGE_ACCESS_CODE` | unset | Server: if set, starting runs and destructive endpoints need header `X-Access-Code`. |

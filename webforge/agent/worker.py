@@ -9,7 +9,9 @@ from urllib.parse import urlparse
 from webforge.agent.prompts import WORKER_SYSTEM, WORKER_TOOLS
 from webforge.safety import check_action
 
-ACTIONS = {"goto", "click", "type", "select", "press", "scroll", "back", "extract"}
+ACTIONS = {"goto", "click", "type", "select", "press", "scroll", "back", "extract",
+           "read", "tables", "links", "find", "structured"}
+DATA_ACTIONS = {"extract"}   # the other readers already put their data in the message
 
 
 @dataclass
@@ -44,10 +46,10 @@ def _jsonable(x: Any) -> Any:
         return str(x)
 
 
-async def _render(browser) -> tuple[str, list]:
+async def _render(browser, max_text: int = 4000) -> tuple[str, list]:
     try:
         obs = await browser.observe()
-        return obs.render(max_elements=100, max_text=2500), list(obs.elements)
+        return obs.render(max_elements=100, max_text=max_text), list(obs.elements)
     except Exception as e:  # noqa: BLE001
         return f"(observation failed: {e})", []
 
@@ -58,6 +60,7 @@ async def run_worker(subtask: str, start_url: Optional[str] = None, *, llm, brow
     steps = 0
     allowed = getattr(cfg, "allowed_domains", None)
     max_steps = int(getattr(cfg, "worker_max_steps", 25))
+    obs_chars = int(getattr(cfg, "obs_text_chars", 4000))
     elements: list = []
 
     def result(success: bool, summary: str, data: Any = None) -> WorkerResult:
@@ -80,8 +83,8 @@ async def run_worker(subtask: str, start_url: Optional[str] = None, *, llm, brow
         steps += 1
         _emit(on_event, "action", {"action": name, "args": args, "ok": res.ok, "message": res.message[:300]})
         msg = ("OK: " if res.ok else "ERROR: ") + res.message
-        if name == "extract" and res.data is not None:
-            msg += "\nDATA: " + json.dumps(_jsonable(res.data))[:2500]
+        if name in DATA_ACTIONS and res.data is not None:
+            msg += "\nDATA: " + json.dumps(_jsonable(res.data))[:4000]
         return msg
 
     # ---- first message
@@ -89,7 +92,7 @@ async def run_worker(subtask: str, start_url: Optional[str] = None, *, llm, brow
         out = await do_action("goto", {"url": start_url})
         if out.startswith("ERROR"):
             hints = (hints + f"\n(Initial goto failed: {out})").strip()
-    text, elements = await _render(browser)
+    text, elements = await _render(browser, obs_chars)
     _emit(on_event, "observe", {"url": getattr(getattr(browser, "page", None), "url", ""), "n_elements": len(elements)})
     first = f"SUBTASK: {subtask}\n"
     if hints:
@@ -126,7 +129,7 @@ async def run_worker(subtask: str, start_url: Optional[str] = None, *, llm, brow
             else:
                 out = await do_action(tc.name, tc.args or {})
             if i == len(calls) - 1:
-                text, elements = await _render(browser)
+                text, elements = await _render(browser, obs_chars)
                 _emit(on_event, "observe", {"url": getattr(getattr(browser, "page", None), "url", ""),
                                             "n_elements": len(elements)})
                 out += "\n\nCURRENT PAGE:\n" + text

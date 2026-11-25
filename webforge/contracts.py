@@ -81,10 +81,13 @@ class BrowserAPI(Protocol):
     async def observe(self) -> Observation: ...
     # action in: goto(url) click(idx) type(idx,text,submit=False) select(idx,value) press(key)
     #            scroll(direction="down"|"up") back() wait(ms) extract(css=None, fields=None)
+    #            read(offset=0) tables() links(filter="") find(text) structured()
     async def act(self, action: str, **args: Any) -> ActionResult: ...
     # replay helpers (no idx; used by skills): action in click|type|select|press|goto|scroll|wait|extract
     async def act_locator(self, action: str, locator: Optional[dict], value: Optional[str] = None,
                           extract: Optional[dict] = None) -> ActionResult: ...
+    # generic extraction (also reachable as act("read"|"tables"|"links"|"find"|"structured", ...))
+    async def new_tab(self) -> "BrowserAPI": ...   # independent tab (own page + trace) for parallel workers
 
 
 # --------------------------------------------------------------------- llm ---

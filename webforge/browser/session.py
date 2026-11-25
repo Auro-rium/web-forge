@@ -1,29 +1,35 @@
-"""Async Playwright wrapper implementing BrowserAPI."""
+"""Async Playwright wrapper implementing BrowserAPI.
+
+Browser owns the Chromium process and context; Tab owns one page with its own trace.
+Browser delegates the BrowserAPI to a default tab, and new_tab() gives independent tabs
+for parallel sub-agents.
+"""
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any, Optional
 
 from playwright.async_api import async_playwright
 
 from webforge.contracts import ActionResult, Observation, TraceStep
-from webforge.browser.actions import (domain_allowed, extract_rows, normalize_url, preview,
-                                      resolve_locator, short_err)
+from webforge.browser.actions import (FIND_JS, LINKS_JS, READ_JS, STRUCTURED_JS, TABLES_JS, domain_allowed,
+                                      extract_rows, normalize_url, preview, resolve_locator, short_err)
 from webforge.browser.observe import observe_page, page_text as _page_text
 
 UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
       "Chrome/124.0.0.0 Safari/537.36")
+
+READ_WINDOW = 6000
 
 
 class Browser:
     def __init__(self, chromium_path: str = "", allowed_domains: Optional[list[str]] = None):
         self.chromium_path = chromium_path
         self.allowed_domains = allowed_domains
-        self.trace: list[TraceStep] = []
-        self.page = None
         self._pw = self._browser = self._ctx = None
-        self._last_obs: Optional[Observation] = None
-        self._new_page = None
+        self._tab: Optional["Tab"] = None
+        self._tabs: list["Tab"] = []
 
     # ------------------------------------------------------------ lifecycle ---
     async def start(self, headless: bool = True) -> None:
@@ -32,9 +38,13 @@ class Browser:
             executable_path=self.chromium_path or None, headless=headless, args=["--no-sandbox"])
         self._ctx = await self._browser.new_context(viewport={"width": 1280, "height": 900}, user_agent=UA)
         self._ctx.set_default_timeout(8000)
-        self._ctx.on("page", lambda p: setattr(self, "_new_page", p))
-        self.page = await self._ctx.new_page()
-        self._new_page = None
+        self._tab = await self.new_tab()
+
+    async def new_tab(self) -> "Tab":
+        """An independent tab (own page + trace) in the same browser context."""
+        tab = Tab(await self._ctx.new_page(), self.allowed_domains)
+        self._tabs.append(tab)
+        return tab
 
     async def close(self) -> None:
         for obj, meth in ((self._ctx, "close"), (self._browser, "close"), (self._pw, "stop")):
@@ -43,7 +53,43 @@ class Browser:
                     await getattr(obj, meth)()
             except Exception:
                 pass
-        self.page = self._ctx = self._browser = self._pw = None
+        self._ctx = self._browser = self._pw = None
+        self._tab, self._tabs = None, []
+
+    # ------------------------------------------- default-tab delegation ---
+    @property
+    def page(self):
+        return self._tab.page if self._tab else None
+
+    @property
+    def trace(self) -> list[TraceStep]:
+        return self._tab.trace if self._tab else []
+
+    def __getattr__(self, name: str):
+        # observe / act / act_locator / page_text / read / tables / ... go to the default tab
+        tab = self.__dict__.get("_tab")
+        if tab is not None and not name.startswith("_"):
+            return getattr(tab, name)
+        raise AttributeError(name)
+
+
+class Tab:
+    def __init__(self, page, allowed_domains: Optional[list[str]] = None):
+        self.page = page
+        self.allowed_domains = allowed_domains
+        self.trace: list[TraceStep] = []
+        self._last_obs: Optional[Observation] = None
+        self._new_page = None
+        page.on("popup", lambda p: setattr(self, "_new_page", p))
+
+    async def new_tab(self) -> "Tab":
+        return Tab(await self.page.context.new_page(), self.allowed_domains)
+
+    async def close(self) -> None:
+        try:
+            await self.page.close()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------- observe ---
     async def observe(self) -> Observation:
@@ -57,6 +103,7 @@ class Browser:
     async def _settle(self) -> None:
         if self._new_page is not None:
             self.page, self._new_page = self._new_page, None
+            self.page.on("popup", lambda p: setattr(self, "_new_page", p))
         try:
             await self.page.wait_for_load_state("domcontentloaded", timeout=5000)
         except Exception:
@@ -110,6 +157,16 @@ class Browser:
             return ActionResult(True, "waited")
         if action == "extract":
             return await self._extract(a.get("css"), a.get("fields"))
+        if action == "read":
+            return await self.read(int(a.get("offset", 0) or 0))
+        if action == "tables":
+            return await self.tables()
+        if action == "links":
+            return await self.links(a.get("filter") or "")
+        if action == "find":
+            return await self.find(str(a.get("text", "")))
+        if action == "structured":
+            return await self.structured()
         return ActionResult(False, f"unknown action '{action}'")
 
     async def _goto(self, url: str) -> ActionResult:
@@ -176,9 +233,16 @@ class Browser:
                 return ActionResult(True, f"pressed {value}")
             if action == "extract":
                 ex = extract or {"type": "text"}
-                if ex.get("type", "css") == "text":
+                kind = ex.get("type", "css")
+                if kind == "text":
                     t = await self.page_text(4000)
                     return ActionResult(True, t[:500], t)
+                if kind == "read":
+                    return await self.read(0)
+                if kind == "tables":
+                    return await self.tables()
+                if kind == "structured":
+                    return await self.structured()
                 return await self._extract(ex.get("selector") or ex.get("css"), ex.get("fields"))
             if action in ("click", "type", "select"):
                 el = await resolve_locator(self.page, locator)
@@ -188,3 +252,58 @@ class Browser:
             return ActionResult(False, f"unknown action '{action}'")
         except Exception as e:
             return ActionResult(False, short_err(e))
+
+    # ------------------------------------------- generic extraction tools ---
+    async def read(self, offset: int = 0, window: int = READ_WINDOW) -> ActionResult:
+        """Readable main content (headings, lists, table rows), paginated."""
+        try:
+            text = await self.page.evaluate(READ_JS) or ""
+        except Exception as e:
+            return ActionResult(False, short_err(e))
+        if not text.strip():
+            text = await self.page_text(200000)
+        offset = max(0, offset)
+        chunk = text[offset:offset + window]
+        nxt = offset + window
+        more = f"\n...[{len(text) - nxt} more chars; read(offset={nxt})]" if nxt < len(text) else ""
+        return ActionResult(bool(chunk), f"{len(text)} chars total, showing {offset}-{offset + len(chunk)}:\n"
+                            + chunk + more, chunk)
+
+    async def tables(self, max_rows: int = 60) -> ActionResult:
+        try:
+            tbs = await self.page.evaluate(TABLES_JS, max_rows)
+        except Exception as e:
+            return ActionResult(False, short_err(e), [])
+        if not tbs:
+            return ActionResult(False, "no data tables on this page", [])
+        return ActionResult(True, f"{len(tbs)} table(s): " + json.dumps(tbs, ensure_ascii=False)[:3000], tbs)
+
+    async def links(self, filter: str = "", max_links: int = 80) -> ActionResult:
+        try:
+            ls = await self.page.evaluate(LINKS_JS, [filter, max_links])
+        except Exception as e:
+            return ActionResult(False, short_err(e), [])
+        if not ls:
+            return ActionResult(False, f"no visible links{' matching ' + repr(filter) if filter else ''}", [])
+        return ActionResult(True, preview(ls, 40), ls)
+
+    async def find(self, text: str, context: int = 300) -> ActionResult:
+        if not text:
+            return ActionResult(False, "text is required")
+        try:
+            r = await self.page.evaluate(FIND_JS, [text, context])
+        except Exception as e:
+            return ActionResult(False, short_err(e))
+        if not r.get("found"):
+            return ActionResult(False, f"'{text}' not found on this page")
+        return ActionResult(True, f"found {r['count']}x; context: {r['context']}", r)
+
+    async def structured(self) -> ActionResult:
+        """JSON-LD + OpenGraph/meta data (prices, dates, ratings) without selectors."""
+        try:
+            d = await self.page.evaluate(STRUCTURED_JS)
+        except Exception as e:
+            return ActionResult(False, short_err(e))
+        if not d.get("jsonld") and not d.get("meta"):
+            return ActionResult(False, "no structured data (JSON-LD/meta) on this page", d)
+        return ActionResult(True, json.dumps(d, ensure_ascii=False, default=str)[:3000], d)

@@ -119,3 +119,38 @@ async def test_extract_invalid_row_selector_is_explained(br, base_url):
     await br.act("goto", url=base_url + "/catalogue/category/poetry/index.html")
     r = await br.act("extract", css="article[[[")
     assert not r.ok and "invalid css selector" in r.message.lower()
+
+
+async def test_tabs_are_independent(br, base_url):
+    t1, t2 = await br.new_tab(), await br.new_tab()
+    r1, r2 = await t1.act("goto", url=base_url + "/wiki/index.html"), await t2.act("goto", url=base_url + "/data/specs.html")
+    assert r1.ok and r2.ok
+    assert "wiki" in t1.page.url and "specs" in t2.page.url and br.page.url.endswith("/index.html")
+    assert len(t1.trace) == 1 and len(t2.trace) == 1 and br.trace == []
+    await t1.close()
+    await t2.close()
+
+
+async def test_generic_extractors(br, base_url):
+    await br.act("goto", url=base_url + "/data/specs.html")
+    r = await br.act("read")
+    assert r.ok and "# Planet data" in r.message and "- Mars has Phobos" in r.message and "footer junk" not in r.message
+    t = await br.act("tables")
+    assert t.ok and t.data[0]["caption"] == "Inner planets"
+    assert {"Planet": "Mars", "Moons": "2", "Day length": "24.6 hours"} in t.data[0]["rows"]
+    links = await br.act("links", filter="wiki")
+    assert links.ok and any(x["text"] == "Mini Wiki" for x in links.data) and len(links.data) == 1
+    f = await br.act("find", text="backwards")
+    assert f.ok and "Venus rotates backwards" in f.data["context"]
+    assert not (await br.act("find", text="Jupiter")).ok
+    s = await br.act("structured")
+    assert s.ok and s.data["jsonld"][0]["offers"]["price"] == "23.50"
+    assert s.data["meta"]["og:title"].startswith("Orbital Notes")
+
+
+async def test_read_paginates(br, base_url):
+    await br.act("goto", url=base_url + "/data/specs.html")
+    r = await br.read(offset=0, window=40)
+    assert r.ok and "read(offset=40)" in r.message
+    r2 = await br.read(offset=40, window=40)
+    assert r2.ok and r2.data != r.data

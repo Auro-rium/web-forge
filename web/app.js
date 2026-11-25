@@ -204,6 +204,8 @@ function describe(kind, d) {
   switch (kind) {
     case 'task_start': return trunc(d.task, 200);
     case 'search': return 'Web search: ' + trunc(d.query, 160);
+    case 'parallel': return 'Launching ' + d.n + ' sub-agents in parallel: ' + (d.agents || []).join(', ');
+    case 'read_urls': return 'Reading ' + (d.urls || []).length + ' page(s) in parallel: ' + trunc((d.urls || []).join(', '), 160);
     case 'delegate': return 'Delegate: ' + trunc(d.subtask, 160) + (d.start_url ? ' (start ' + d.start_url + ')' : '');
     case 'skill_run': return 'Run skill ' + d.name + ' ' + fmtArgs(d.params);
     case 'skill_result': return d.name + ': ' + (d.ok ? 'ok' : 'FAILED') + (d.message ? ' - ' + trunc(d.message, 160) : '');
@@ -213,7 +215,7 @@ function describe(kind, d) {
     case 'skill_built': return 'Built skill ' + d.name + (d.repaired ? ' (repaired, v' + d.version + ')' : '');
     case 'lesson': return trunc(d.text, 200);
     case 'final': return 'Final answer ready';
-    case 'nudge': return trunc(d.message, 200);
+    case 'nudge': case 'budget': return trunc(d.message, 200);
     case 'warn': case 'error': return trunc(d.message, 240);
     default: return trunc(JSON.stringify(d), 160);
   }
@@ -280,7 +282,8 @@ const Live = {
     tl.append(el('li', { class: 'k-' + kind + (fail ? ' fail' : '') },
       el('span', { class: 'ts' }, (typeof ev.t === 'number' ? ev.t.toFixed(1) : '') + 's'),
       el('span', { class: 'kd' }, kind.replace(/_/g, ' ')),
-      el('span', { class: 'tx' }, describe(kind, d))));
+      el('span', { class: 'tx' }, d.agent ? el('span', { class: 'lane lane-' + (parseInt(String(d.agent).slice(1), 10) % 6) }, d.agent) : '',
+        describe(kind, d))));
     if (stick) tl.scrollTop = tl.scrollHeight;
     this.renderMetrics();
   },

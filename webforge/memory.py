@@ -17,6 +17,39 @@ def _tokens(s: str) -> set[str]:
     return set(_WORD.findall((s or "").lower()))
 
 
+_STOP = set("""the a an and or of to in on for at by with from is are was were be this that these those it its as
+what who whom which when where why how latest current right now today find get give show list me my your our
+please about into than then there their them they use using page pages site website web www com org net http https
+html top best most more less any all each per vs not no yes can could should would will""".split())
+
+
+def _informative(s: str) -> set[str]:
+    return {t for t in _tokens(s) if len(t) > 2 and t not in _STOP}
+
+
+def relevant(query: str, hits: list[dict], limit: int = 5) -> list[dict]:
+    """Keep only lessons that share the query's site or >= 2 informative words.
+
+    Backboard's semantic scores are not a usable relevance signal on their own (unrelated lessons
+    score ~0.9), so recall is re-ranked by lexical/domain overlap and unrelated hits are dropped.
+    """
+    q = _informative(query)
+    out, seen = [], set()
+    for h in hits:
+        if h["content"] in seen:
+            continue
+        seen.add(h["content"])
+        md = h.get("metadata") or {}
+        dom = str(md.get("domain") or "").lower()
+        dom_parts = {p for p in re.split(r"[.:]", dom) if len(p) > 2 and p not in _STOP}
+        overlap = len(q & _informative(h["content"]))
+        dom_hit = bool(dom_parts and dom_parts & q)
+        if dom_hit or overlap >= 2:
+            out.append({**h, "score": overlap + (3 if dom_hit else 0)})
+    out.sort(key=lambda x: -x["score"])
+    return out[:limit]
+
+
 class LocalMemory:
     """JSONL-backed memory with keyword-overlap search."""
 
@@ -73,7 +106,9 @@ class LocalMemory:
             pass
 
     async def lessons_for(self, domain_or_task: str, limit: int = 5) -> str:
-        return _format(await self.search(domain_or_task, limit))
+        cands = await self.search(domain_or_task, 15)
+        cands += self._rank(domain_or_task, 15)          # local mirror keeps metadata (domain)
+        return _format(relevant(domain_or_task, cands, limit))
 
     async def aclose(self) -> None:
         return None

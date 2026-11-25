@@ -53,7 +53,27 @@ flowchart LR
 
 ### Roles and tools
 
-The planner never touches the browser. Its tools (`agent/prompts.py`): `write_todos`, `write_file`, `read_file`, `list_skills`, `run_skill`, `web_search`, `delegate_browse`, `final_answer`. `web_search` is a one-shot Backboard call with `web_search="Auto"` (role `searcher`, no browser); the prompt routes general questions there first and keeps `delegate_browse` for site-specific interaction. Current weather goes to wttr.in's plain-text report, which the skill builder turns into a reusable `read_current_weather_wttr(location)` skill. The worker's tools: `goto`, `click`, `type`, `select`, `press`, `scroll`, `back`, `extract`, `done`. A run ends when the planner calls `final_answer` (`RunResult.ok = True`), or when it exhausts `planner_max_steps` (30) tool rounds or stalls.
+The planner never touches the browser. Its tools (`agent/prompts.py`):
+
+| Tool | What it does | Parallel |
+|---|---|---|
+| `web_search(queries)` | Backboard call with `web_search="Auto"` (role `searcher`, no browser): short answer with sources per query | yes, one call per query |
+| `read_urls(urls)` | opens each URL in its own tab and returns its readable main content; full text saved to `pages/<host>-<n>.md` | yes, one tab per URL |
+| `delegate_browse(subtask, start_url)` | one interactive worker (own LLM thread) on the default tab | - |
+| `parallel_browse(subtasks)` | one worker per subtask, each with its own LLM thread **and** its own tab; results merged | yes |
+| `run_skill`, `list_skills` | replay learned skills (no LLM) | - |
+| `write_todos`, `write_file`, `read_file(name, offset, limit)` | plan and workspace | - |
+| `final_answer` | ends the run | - |
+
+Concurrency is capped by `WEBFORGE_PARALLEL` (default 4) with an `asyncio.Semaphore`. The browser is split into `Browser` (Chromium process + context) and `Tab` (one page with its own trace and observation); `Browser.new_tab()` gives isolated tabs, and `Browser` still delegates the single-tab API to a default tab. Skill building after `parallel_browse` runs sequentially, on each worker's own tab, so the library sees no concurrent writes. Every worker event carries an `agent` id (`w1`, `w2`, ...) that both UIs show as a lane tag.
+
+The worker's tools: `goto`, `click`, `type`, `select`, `press`, `scroll`, `back`, `extract(css, fields)`, plus selector-free readers that work on any site: `read(offset)` (main content as text with headings, lists and table rows, in 6000-char pages), `tables()` (rows keyed by header), `links(filter)`, `find(text)` (scroll to a phrase, return context) and `structured()` (JSON-LD and OpenGraph/meta: prices, dates, ratings), and `done`.
+
+**Context management.** Any planner tool output over 3000 characters is written in full to the run workspace (`results/<tool>-<n>.md`) and the planner receives a preview plus the file name; worker `done.data` over 1500 characters is saved the same way. `read_file` pages through files with `offset`/`limit`, so a long task keeps its findings without overflowing the planner's context (the deep-agents "file system as memory" pattern).
+
+**Memory relevance.** Backboard memory search ranks unrelated lessons at about 0.9, so recall is re-ranked locally: a lesson is used only if it shares the task's site (metadata `domain`) or at least two informative words with it (`memory.relevant`). The reflector also drops lessons about network failures, which depend on the machine rather than the site.
+
+A run ends when the planner calls `final_answer` (`RunResult.ok = True`), or when it exhausts `planner_max_steps` (30) tool rounds or stalls.
 
 ## 3. One run, including skill reuse
 
@@ -104,7 +124,8 @@ Details that matter:
 WebForge uses [Backboard](https://backboard.io) as the single LLM gateway (`backboard-sdk`), routed to `WEBFORGE_PROVIDER` / `WEBFORGE_MODEL` (defaults `anthropic` / `claude-haiku-5-5`).
 
 * **Assistants per role.** One Backboard assistant per role (`webforge-planner`, `-worker`, `-builder`, `-reflector`) plus `webforge-knowledge` for memory. Ids are cached in `data/state.json`; if absent, the assistant is looked up by name with `list_assistants` and created only if missing. Creation is guarded by an `asyncio.Lock`.
-* **Tool-call loop.** `chat()` calls `client.send_message(message, assistant_id, thread_id, tools, llm_provider, model_name, system_prompt, memory=None[, json_output=True])`. If the reply has tool calls, the caller executes them and calls `submit()`, which wraps `client.submit_tool_outputs_simple(thread_id, [{tool_call_id, output}])`. Repeat until a reply with no tool calls.
+* **Tool-call loop.** `chat()` calls `client.send_message(message, assistant_id, thread_id, tools, llm_provider, model_name, system_prompt, memory=None[, json_output=True])`. If the reply has tool calls, the caller executes them and calls `submit()`. Repeat until a reply with no tool calls.
+* **Tool results go back as a message.** Measured live: after `submit_tool_outputs_simple`, Backboard stores an *empty* assistant turn (no text, no tool calls), so the model can never chain a second tool round from that path; every round needed an extra "nudge" LLM call. `submit()` therefore sends the results as a `TOOL RESULTS` message on the same thread, with the thread's tools and system prompt, which returns `REQUIRES_ACTION` with the next tool calls directly. It falls back to the native submit on error, and `WEBFORGE_TOOL_TRANSPORT=submit` restores it.
 * **Status is authoritative.** `_account()` only trusts `tool_calls` when the response status is empty or `REQUIRES_ACTION`. After a submit, Backboard returns `COMPLETED` responses that still echo the previous `tool_calls`; treating those as new calls would loop forever, so they are discarded.
 * **System prompt per thread.** The system prompt is sent when a thread starts and remembered per `thread_id`; later `chat()` calls on the same thread that pass `system=""` reuse it.
 * **Usage and cost** are read from the last message of each response (`total_tokens` or input+output, and `cost_usd` as reported by Backboard) and accumulated (`calls`, `tokens`, `cost_usd`); `RunResult` reports the delta over a run.

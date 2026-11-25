@@ -28,6 +28,13 @@ class Config:
     ledger_file: Path = field(default_factory=lambda: Path(os.getenv("WEBFORGE_LEDGER", ROOT / "data" / "spend.json")))
     worker_max_steps: int = int(os.getenv("WEBFORGE_WORKER_STEPS", "25"))
     planner_max_steps: int = int(os.getenv("WEBFORGE_PLANNER_STEPS", "30"))
+    # research budget: after this many tool rounds the planner is told to answer; 3 rounds later only
+    # final_answer / workspace tools are allowed (stops endless re-searching on conflicting sources)
+    planner_soft_rounds: int = int(os.getenv("WEBFORGE_SOFT_ROUNDS", "6"))
+    # parallel sub-agents / tabs per tool call (parallel_browse, read_urls, web_search queries)
+    max_parallel: int = int(os.getenv("WEBFORGE_PARALLEL", "4"))
+    # characters of page text shown to the worker per observation (read() pages through the rest)
+    obs_text_chars: int = int(os.getenv("WEBFORGE_OBS_TEXT", "4000"))
     chromium_path: str = field(default_factory=lambda: os.getenv(
         "WEBFORGE_CHROMIUM", "/opt/pw-browsers/chromium" if Path("/opt/pw-browsers/chromium").exists() else ""))
     # empty list = any public website ("*" or unset). Set a comma list to restrict browsing to those domains.

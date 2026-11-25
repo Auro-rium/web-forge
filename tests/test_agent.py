@@ -151,3 +151,122 @@ def test_reflector_drops_transient_network_lessons():
     assert is_transient("Direct navigation to Best Buy search URLs failed; use web search")
     assert not is_transient("Use the Wikipedia infobox 'Stable release' field for the latest version")
     assert not is_transient("Books are listed as article.product_pod; price in .price_color")
+
+
+def _cfg(tmp_path, **kw):
+    return Config(data_dir=tmp_path, runs_dir=tmp_path / "runs", ledger_file=tmp_path / "spend.json", **kw)
+
+
+async def test_parallel_browse_runs_workers_concurrently_in_own_tabs(base_url, br, tmp_path):
+    """Three independent subtasks -> three workers, three tabs, results merged for the planner."""
+    import asyncio
+    from webforge.llm import MockLLM
+    live = {"now": 0, "peak": 0}
+    pages = {"w-books": base_url + "/index.html", "w-wiki": base_url + "/wiki/index.html",
+             "w-data": base_url + "/data/specs.html"}
+
+    def handler(role, message, thread_id, tools, system, kind):
+        if role == "planner" and kind == "chat":
+            return {"tool_calls": [{"name": "parallel_browse", "args": {"subtasks": [
+                {"subtask": f"report title of {k}", "start_url": u} for k, u in pages.items()]}}]}
+        if role == "planner":
+            return {"tool_calls": [{"name": "final_answer", "args": {"answer": message}}]}
+        if role == "worker":
+            title = re.search(r"TITLE: (.*)", message).group(1)
+            return {"tool_calls": [{"name": "done", "args": {"success": True, "summary": "ok", "data": {"title": title}}}]}
+        return "{}"
+
+    llm = MockLLM(handler)
+    orig_new_tab = br.new_tab
+
+    async def counting_new_tab():
+        tab = await orig_new_tab()
+        live["now"] += 1
+        live["peak"] = max(live["peak"], live["now"])
+        orig_close = tab.close
+
+        async def close():
+            await asyncio.sleep(0)
+            live["now"] -= 1
+            await orig_close()
+        tab.close = close
+        return tab
+    br.new_tab = counting_new_tab
+    events = []
+    r = await run_task("compare three pages", llm=llm, browser=br, library=SkillLibrary(tmp_path / "sk"),
+                       memory=LocalMemory(path=tmp_path / "m.jsonl"), cfg=_cfg(tmp_path), learn=False,
+                       on_event=lambda k, d: events.append((k, d)))
+    assert r.ok and "3/3 subtasks succeeded" in r.answer
+    for t in ("Mini Wiki", "Specs - Mini Data"):
+        assert t in r.answer
+    assert live["peak"] == 3 and live["now"] == 0            # three tabs open at once, all closed after
+    agents = {d.get("agent") for k, d in events if k == "delegate"}
+    assert agents == {"w1", "w2", "w3"}
+    assert br.page.url == "about:blank"                       # default tab untouched
+
+
+async def test_read_urls_parallel_and_offloads_to_files(base_url, br, tmp_path):
+    llm = ScriptedMock({"planner": [
+        {"tool_calls": [{"name": "read_urls", "args": {"urls": [base_url + "/data/specs.html",
+                                                                 base_url + "/wiki/index.html"]}}]},
+        lambda **kw: {"tool_calls": [{"name": "final_answer", "args": {"answer": kw["message"]}}]},
+    ]})
+    r = await run_task("read two pages", llm=llm, browser=br, library=SkillLibrary(tmp_path / "sk"),
+                       memory=LocalMemory(path=tmp_path / "m.jsonl"), cfg=_cfg(tmp_path), learn=False)
+    assert r.ok and "Planet data" in r.answer
+    files = [n for n in r.notes if n.startswith("pages/")]
+    assert len(files) == 2 and any("| Mars | 2 | 24.6 hours |" in r.notes[n] for n in files)
+
+
+async def test_large_output_offloaded_and_paged(tmp_path):
+    big = "x" * 9000 + "THE-END"
+    llm = ScriptedMock({
+        "planner": [
+            {"tool_calls": [{"name": "web_search", "args": {"queries": ["big"]}}]},
+            {"tool_calls": [{"name": "read_file", "args": {"name": "results/search-1.md", "offset": 8990}}]},
+            lambda **kw: {"tool_calls": [{"name": "final_answer", "args": {"answer": kw["message"]}}]},
+        ],
+        "searcher": [{"text": big}],
+    })
+    r = await run_task("q", llm=llm, browser=None, library=SkillLibrary(tmp_path / "sk"),
+                       memory=LocalMemory(path=tmp_path / "m.jsonl"), cfg=_cfg(tmp_path), learn=False)
+    assert r.notes["results/search-1.md"] == big
+    submit = next(e for e in llm.log if e["role"] == "planner" and e["kind"] == "submit")
+    first_output = json.loads(submit["message"])[0]["output"]
+    assert "saved to file 'results/search-1.md'" in first_output and len(first_output) < 3000
+    assert "THE-END" in r.answer
+
+
+async def test_web_search_many_queries_in_one_call(tmp_path):
+    events = []
+    llm = ScriptedMock({
+        "planner": [
+            {"tool_calls": [{"name": "web_search", "args": {"queries": ["python latest", "node latest", "go latest"]}}]},
+            lambda **kw: {"tool_calls": [{"name": "final_answer", "args": {"answer": kw["message"]}}]},
+        ],
+        "searcher": [{"text": "A"}, {"text": "B"}, {"text": "C"}],
+    })
+    r = await run_task("versions", llm=llm, browser=None, library=SkillLibrary(tmp_path / "sk"),
+                       memory=LocalMemory(path=tmp_path / "m.jsonl"), cfg=_cfg(tmp_path), learn=False,
+                       on_event=lambda k, d: events.append((k, d)))
+    assert r.ok and all(f"### {q}" in r.answer for q in ("python latest", "node latest", "go latest"))
+    assert sum(1 for k, _ in events if k == "search") == 3
+
+
+async def test_research_budget_forces_an_answer(tmp_path):
+    """A planner that keeps searching is told to answer after the soft budget and refused 3 rounds later."""
+    searches = [{"tool_calls": [{"name": "web_search", "args": {"queries": [f"q{i}"]}}]} for i in range(10)]
+    llm = ScriptedMock({
+        "planner": searches[:6] + [
+            lambda **kw: {"tool_calls": [{"name": "web_search", "args": {"queries": ["again"]}}]}] * 3 + [
+            lambda **kw: {"tool_calls": [{"name": "final_answer", "args": {"answer": kw["message"][-300:]}}]}],
+        "searcher": [{"text": f"result {i}"} for i in range(20)],
+    })
+    cfg = _cfg(tmp_path)
+    cfg.planner_soft_rounds = 3
+    r = await run_task("q", llm=llm, browser=None, library=SkillLibrary(tmp_path / "sk"),
+                       memory=LocalMemory(path=tmp_path / "m.jsonl"), cfg=cfg, learn=False)
+    msgs = [e["message"] for e in llm.log if e["role"] == "planner" and e["kind"] == "submit"]
+    assert any("[budget]" in m for m in msgs)
+    assert "research budget exhausted" in r.answer
+    assert sum(1 for e in llm.log if e["role"] == "searcher") == 5   # rounds 1-5 searched, 6+ refused
