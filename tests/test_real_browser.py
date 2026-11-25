@@ -1,7 +1,6 @@
 """Driving a real, already-running Chrome over CDP: the user's tabs stay untouched and the agent's tabs are visibly marked."""
 import json
 import socket
-import urllib.request
 
 import pytest
 from playwright.async_api import async_playwright

@@ -354,3 +354,158 @@ def test_sse_survives_event_cap(client, monkeypatch):
     with client.stream("GET", f"/api/runs/{rid}/events") as resp:
         body = "".join(resp.iter_text())
     assert '"answer": "ok"' in body
+
+
+# ---------------------------------------------------------------- new in this change ---
+
+def test_answer_all_resolves_open_futures(client, monkeypatch):
+    async def fake(run, cfg):
+        loop = asyncio.get_running_loop()
+        futs = []
+        for q in ("a1", "a2", "a3"):
+            f = loop.create_future()
+            run.pending[q] = f
+            futs.append(f)
+        await server._push(run, "ask_id", {"ask_id": "a1", "question": "Approve: x", "options": []})
+        got = [await f for f in futs]
+        run.result = {"answer": ",".join(got), "ok": True}
+        await server._finish(run, "done")
+    monkeypatch.setattr(server, "_execute", fake)
+    rid = client.post("/api/run", json={"task": "t"}).json()["run_id"]
+    assert _wait(lambda: len(client.get(f"/api/runs/{rid}").json()["pending"]) == 3)
+    r = client.post(f"/api/runs/{rid}/answer_all", json={"answer": "approve", "ask_ids": ["a1", "a2", "a3", "zz"]})
+    assert r.json() == {"resolved": 3}
+    assert _wait(lambda: client.get(f"/api/runs/{rid}").json()["status"] == "done")
+    assert client.post(f"/api/runs/{rid}/answer_all", json={"answer": "x", "ask_ids": ["a1"]}).json() == {"resolved": 0}
+    assert client.post("/api/runs/nope/answer_all", json={"answer": "x", "ask_ids": []}).status_code == 404
+
+
+def test_answer_all_needs_access_code(client, monkeypatch):
+    monkeypatch.setenv("WEBFORGE_ACCESS_CODE", "sesame")
+    monkeypatch.setattr(server, "_execute", _stub(asyncio.Event()))
+    rid = client.post("/api/run", json={"task": "t"}, headers={"X-Access-Code": "sesame"}).json()["run_id"]
+    assert client.post(f"/api/runs/{rid}/answer_all", json={"answer": "x", "ask_ids": []}).status_code == 401
+
+
+def test_metrics_ticker_pushes_events(client, cfg, monkeypatch):
+    class FakeLLM:
+        n = 0
+
+        def usage(self):
+            FakeLLM.n += 1
+            return {"calls": 3, "tokens": 120, "cost_usd": 0.01 * FakeLLM.n}
+
+    async def fake(run, c):
+        await server._push(run, "agent_state", {"agent": "w1", "state": "running"})
+        await server._push(run, "action", {"action": "click"})
+        t = asyncio.create_task(server._metrics_ticker(run, c, FakeLLM(), interval=0.05))
+        await asyncio.sleep(0.3)
+        t.cancel()
+        await server._finish(run, "done")
+    monkeypatch.setattr(server, "_execute", fake)
+    rid = client.post("/api/run", json={"task": "t"}).json()["run_id"]
+    with client.stream("GET", f"/api/runs/{rid}/events") as r:
+        body = "".join(r.iter_text())
+    evs = [json.loads(l[6:]) for l in body.splitlines() if l.startswith("data: ") and '"kind"' in l]
+    ms = [e["data"] for e in evs if e["kind"] == "metrics"]
+    assert len(ms) >= 2
+    m = ms[-1]
+    assert m["steps"] == 1 and m["active"] == {"w1": "running"} and m["tokens"] == 120 and m["llm_calls"] == 3
+    assert m["run_cost"] > 0 and m["deadline_s"] == cfg.run_deadline_s and m["global_cap"] == 1.0
+    assert not (cfg.runs_dir / rid / "log.jsonl").read_text().count('"kind": "metrics"')
+
+
+def test_metrics_ticker_survives_missing_usage(cfg):
+    async def go():
+        run = server.Run("t1", server.RunRequest(task="x"))
+        t = asyncio.create_task(server._metrics_ticker(run, cfg, object(), interval=0.01))
+        await asyncio.sleep(0.05)
+        t.cancel()
+        return [e for e in run.events if e["kind"] == "metrics"]
+    assert asyncio.run(go())
+
+
+def test_log_jsonl_written_and_downloadable(client, cfg, monkeypatch):
+    client.post("/api/secrets", json={"name": "pw", "value": "hunter2-secret"})
+
+    async def fake(run, c):
+        await server._push(run, "screenshot", {"agent": "a", "b64": "AAAA"})
+        await server._push(run, "metrics", {"elapsed": 1})
+        await server._push(run, "action", {"message": "typed hunter2-secret"})
+        await server._push(run, "final", {"answer": "ok"})
+        await server._finish(run, "done")
+    monkeypatch.setattr(server, "_execute", fake)
+    rid = client.post("/api/run", json={"task": "t"}).json()["run_id"]
+    with client.stream("GET", f"/api/runs/{rid}/events") as r:
+        "".join(r.iter_text())
+    r = client.get(f"/api/runs/{rid}/log")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("application/x-ndjson")
+    assert f'filename="{rid}.jsonl"' in r.headers["content-disposition"]
+    lines = [json.loads(l) for l in r.text.splitlines()]
+    assert [l["kind"] for l in lines] == ["action", "final"]
+    assert set(lines[0]) == {"n", "t", "kind", "data"}
+    assert "hunter2" not in r.text and "{{secret:pw}}" in r.text
+
+
+def test_log_rejects_bad_or_missing(client):
+    assert client.get("/api/runs/..%2Fetc/log").status_code == 404
+    assert client.get("/api/runs/bad id!/log").status_code == 404
+    assert client.get("/api/runs/web_nothing/log").status_code == 404
+
+
+def test_health_browser_mode(client, cfg, monkeypatch):
+    h = client.get("/api/health").json()
+    assert h["real_browser"] is False and h["browser_mode"] == "own Chromium (headless, live thumbnails)"
+    monkeypatch.setenv("WEBFORGE_HEADED", "1")
+    assert client.get("/api/health").json()["browser_mode"] == "own Chromium (window)"
+    cfg.cdp_url = "http://127.0.0.1:9222"
+    h = client.get("/api/health").json()
+    assert h["real_browser"] is True and h["browser_mode"] == "your Chrome (remote debugging)"
+
+
+def test_execute_on_ask_carries_agent_and_kind(client, cfg, monkeypatch):
+    import webforge.agent.planner as planner
+    import webforge.browser.session as session
+
+    class B:
+        async def close(self):
+            pass
+
+    async def fake_open(c, secrets=None, headless=True):
+        return B()
+
+    async def fake_run_task(task, llm, browser, cfg, on_event, on_ask, run_dir, resume):
+        a = await on_ask("Approve: send email?", ["approve", "deny"], "worker1")
+        b = await on_ask("Which one?", [])
+        raise RuntimeError(f"stop {a} {b}")
+    monkeypatch.setattr(session, "open_browser", fake_open)
+    monkeypatch.setattr(planner, "run_task", fake_run_task)
+    monkeypatch.setenv("WEBFORGE_MOCK", "1")
+    rid = client.post("/api/run", json={"task": "t"}).json()["run_id"]
+    run = server.STATE.runs[rid]
+
+    def asks():
+        return [e["data"] for e in run.events if e["kind"] == "ask_id"]
+    assert _wait(lambda: len(asks()) == 1)
+    a = asks()[0]
+    assert a["agent"] == "worker1" and a["kind"] == "approval" and "timeout_s" in a
+    client.post(f"/api/runs/{rid}/answer", json={"ask_id": a["ask_id"], "answer": "approve"})
+    assert _wait(lambda: len(asks()) == 2)
+    assert asks()[1]["agent"] == "planner" and asks()[1]["kind"] == "question"
+    client.post(f"/api/runs/{rid}/answer", json={"ask_id": asks()[1]["ask_id"], "answer": "A"})
+    assert _wait(lambda: client.get(f"/api/runs/{rid}").json()["status"] == "error")
+
+
+def test_execute_open_browser_runtime_error_is_clean(client, cfg, monkeypatch):
+    import webforge.browser.session as session
+
+    async def boom(c, secrets=None, headless=True):
+        raise RuntimeError("approval=auto is refused with your own Chrome")
+    monkeypatch.setattr(session, "open_browser", boom)
+    monkeypatch.setenv("WEBFORGE_MOCK", "1")
+    rid = client.post("/api/run", json={"task": "t"}).json()["run_id"]
+    assert _wait(lambda: client.get(f"/api/runs/{rid}").json()["status"] == "error")
+    info = client.get(f"/api/runs/{rid}").json()
+    assert info["error"] == "approval=auto is refused with your own Chrome"
+    errs = [e for e in server.STATE.runs[rid].events if e["kind"] == "error"]
+    assert errs and "Traceback" not in errs[0]["data"]["message"]
