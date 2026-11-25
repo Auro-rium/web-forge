@@ -161,6 +161,9 @@ async def run_task(task: str, *, llm, browser, cfg, on_event: Optional[Callable]
         data = "" if wr.data is None else json.dumps(wr.data, default=str, ensure_ascii=False)
         head = (f"[{agent}] {'SUCCESS' if wr.success else 'FAILED'} ({wr.steps} steps, {wr.domain})\n"
                 f"summary: {wr.summary}\n")
+        if wr.denied:
+            head += (f"USER DID NOT APPROVE: {'; '.join(wr.denied)}. Do not retry it and do not start another "
+                     "sub-agent for it: tell the user in final_answer that it was not done and why.\n")
         if len(data) > 1500:
             counters["data"] = counters.get("data", 0) + 1
             name = f"results/{agent}-data-{counters['data']}.json"

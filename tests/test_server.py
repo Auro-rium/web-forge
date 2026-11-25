@@ -322,3 +322,35 @@ def test_run_without_key_is_428(client, cfg, monkeypatch):
     assert server.STATE.active is None
     monkeypatch.setenv("WEBFORGE_MOCK", "1")      # mock mode never needs a key
     assert client.post("/api/run", json={"task": "hello"}).status_code == 202
+
+
+def test_sse_does_not_skip_events_when_screenshots_replace_each_other(client, monkeypatch):
+    """Dropping an older screenshot must not shift the stream position and swallow the next event (e.g. the ask card)."""
+    async def fake(run, cfg):
+        for i in range(6):
+            await server._push(run, "screenshot", {"agent": "w1", "jpeg_b64": f"frame{i}"})
+            await server._push(run, "action", {"message": f"step {i}"})
+            await asyncio.sleep(0.02)
+        await server._push(run, "ask_id", {"ask_id": "q1", "question": "Approve?"})
+        await server._finish(run, "done")
+    monkeypatch.setattr(server, "_execute", fake)
+    rid = client.post("/api/run", json={"task": "t"}).json()["run_id"]
+    with client.stream("GET", f"/api/runs/{rid}/events") as resp:
+        body = "".join(resp.iter_text())
+    assert body.count('"step ') == 6 and '"ask_id": "q1"' in body
+    assert "frame5" in body
+
+
+def test_sse_survives_event_cap(client, monkeypatch):
+    monkeypatch.setattr(server, "MAX_EVENTS", 10)
+
+    async def fake(run, cfg):
+        for i in range(40):
+            await server._push(run, "action", {"message": f"s{i}"})
+        await server._push(run, "final", {"answer": "ok", "ok": True})
+        await server._finish(run, "done")
+    monkeypatch.setattr(server, "_execute", fake)
+    rid = client.post("/api/run", json={"task": "t"}).json()["run_id"]
+    with client.stream("GET", f"/api/runs/{rid}/events") as resp:
+        body = "".join(resp.iter_text())
+    assert '"answer": "ok"' in body

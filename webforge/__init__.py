@@ -1,1 +1,1 @@
-"""WebForge: a self-improving web-browsing deep agent."""
+"""WebForge: an autonomous computer-use agent."""

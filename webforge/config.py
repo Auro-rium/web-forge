@@ -30,7 +30,7 @@ class Config:
     planner_max_steps: int = int(os.getenv("WEBFORGE_PLANNER_STEPS", "30"))
     # per-run budget: at 70% the planner is told to wrap up, at 100% research/browse tools are refused
     run_budget_usd: float = float(os.getenv("WEBFORGE_RUN_BUDGET_USD", "0.25"))
-    run_deadline_s: float = float(os.getenv("WEBFORGE_RUN_DEADLINE_S", "600"))
+    run_deadline_s: float = float(os.getenv("WEBFORGE_RUN_DEADLINE_S", "300"))
     # consequential actions (submit, send, login, delete...): ask | auto | deny. Payments are always blocked.
     approval: str = field(default_factory=lambda: os.getenv("WEBFORGE_APPROVAL", "ask").strip().lower())
     ask_timeout_s: float = float(os.getenv("WEBFORGE_ASK_TIMEOUT", "90"))

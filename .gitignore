@@ -2,7 +2,7 @@
 .env
 .vercel/
 
-# runtime data (skills, memory, spend ledger, run artefacts)
+# runtime data (spend ledger, saved key, run artefacts)
 /data/
 runs/
 

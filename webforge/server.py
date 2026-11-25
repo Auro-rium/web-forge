@@ -212,7 +212,8 @@ class Run:
         self.resume = resume
         self.parent = parent
         self.status = "running"          # running | done | error | cancelled
-        self.events: list[dict] = []
+        self.events: list[dict] = []     # each carries a monotonically increasing "n"; old entries may be dropped
+        self.seq = 0
         self.result: Optional[dict] = None
         self.error: Optional[str] = None
         self.started = time.time()
@@ -250,7 +251,8 @@ async def _push(run: Run, kind: str, data: dict) -> None:
     data = _jsonable(data or {})
     sec = STATE.get_secrets()
     data = json.loads(sec.redact(json.dumps(data, ensure_ascii=False)))
-    ev = {"t": round(time.time() - run.started, 2), "kind": kind, "data": data}
+    run.seq += 1
+    ev = {"n": run.seq, "t": round(time.time() - run.started, 2), "kind": kind, "data": data}
     if kind == "screenshot":   # live-only: replace the previous frame of the same agent instead of piling up
         run.events = [e for e in run.events
                       if not (e["kind"] == "screenshot" and e["data"].get("agent") == data.get("agent"))]
@@ -495,17 +497,20 @@ async def run_events(run_id: str) -> StreamingResponse:
     run = _get_run(run_id)
 
     async def gen():
-        i = 0
+        sent = 0   # highest event number already sent: list edits (dropped screenshots, the event cap) cannot shift it
         last = time.monotonic()
         while True:
-            while i < len(run.events):
-                yield _sse(run.events[i])
-                i += 1
+            fresh = [e for e in list(run.events) if e["n"] > sent]
+            for e in fresh:
+                yield _sse(e)
+                sent = e["n"]
                 last = time.monotonic()
             if run.status != "running":
-                if i >= len(run.events):
+                if not any(e["n"] > sent for e in run.events):
                     yield _sse({"status": run.status, "result": run.result, "error": run.error}, event="done")
                     return
+                continue
+            if fresh:
                 continue
             try:
                 async with run.cond:

@@ -30,6 +30,7 @@ class WorkerResult:
     steps: int = 0
     trace: list = field(default_factory=list)   # list[TraceStep]
     domain: str = ""
+    denied: list = field(default_factory=list)  # actions the user (or the approval mode) refused
 
 
 def _emit(on_event: Optional[Callable], kind: str, data: dict) -> None:
@@ -76,6 +77,7 @@ async def run_worker(subtask: str, start_url: Optional[str] = None, *, llm, brow
     secrets = getattr(browser, "secrets", None)
     elements: list = []
     last_shot = [0.0]
+    denied: list[str] = []
 
     def redact(text: str) -> str:
         return secrets.redact(text) if secrets is not None else text
@@ -84,7 +86,7 @@ async def run_worker(subtask: str, start_url: Optional[str] = None, *, llm, brow
         return {k: redact(str(v)) for k, v in (fields or {}).items()}
 
     def result(success: bool, summary: str, data: Any = None) -> WorkerResult:
-        return WorkerResult(success=success, summary=summary, data=data, steps=steps,
+        return WorkerResult(success=success, summary=summary, data=data, steps=steps, denied=list(denied),
                             trace=list(browser.trace[trace_start:]),
                             domain=(urlparse(_url(browser)).hostname or "").lower())
 
@@ -108,6 +110,7 @@ async def run_worker(subtask: str, start_url: Optional[str] = None, *, llm, brow
             return None
         if mode == "deny" or ask is None:
             _emit(on_event, "action", {"action": name, "args": args, "ok": False, "message": "NOT APPROVED: " + reason})
+            denied.append(reason)
             return f"ERROR: '{reason}' needs the user's approval and approval is not available. Do not retry it."
         await screenshot(force=True)
         fields = args.get("fields") or {e.name or f"[{e.idx}]": e.value for e in elements
@@ -116,6 +119,7 @@ async def run_worker(subtask: str, start_url: Optional[str] = None, *, llm, brow
         if _approved(answer):
             return None
         _emit(on_event, "action", {"action": name, "args": args, "ok": False, "message": "DENIED by user: " + reason})
+        denied.append(reason)
         return f"ERROR: the user did not approve '{reason}' (answer: {answer[:120]}). Do not retry it."
 
     async def do_action(name: str, args: dict) -> str:

@@ -283,3 +283,21 @@ async def test_checkpoint_and_resume(cfg):
     assert ("resume", {"files": 1, "todos": 2}) in events
     assert "RESUMING" in llm2.log[0]["message"]
     assert load_checkpoint(run_dir)["status"] == "done"
+
+
+async def test_planner_is_told_not_to_retry_a_denied_action(base_url, br, cfg):
+    llm, ask, asked = _register_worker(base_url, ["deny"])
+    wr = await run_worker("register Ada", base_url + "/forms/register.html", llm=llm, browser=br, cfg=cfg, ask=ask)
+    assert wr.denied and "Submit registration" in wr.denied[0]
+
+    def handler(role, message, thread_id, tools, system, kind):
+        if role == "planner" and kind == "chat":
+            return {"tool_calls": [{"name": "delegate_browse", "args": {"subtask": "register Ada", "start_url": base_url + "/forms/register.html"}}]}
+        if role == "planner":
+            return final(message=message)
+        if role == "worker":
+            return _register_worker(base_url, [])[0].handler(role, message, thread_id, tools, system, kind)
+        return '{"complete": true}'
+    cfg.approval = "deny"
+    r = await run_task("register Ada", llm=MockLLM(handler), browser=br, cfg=cfg)
+    assert "USER DID NOT APPROVE" in r.answer and "Do not retry" in r.answer

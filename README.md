@@ -4,6 +4,10 @@
 
 Built as a *deep agent*: a planner with a todo list and a file workspace, specialised sub-agents with their own context, parallel execution, a human-in-the-loop safety gate, a verifier, and time/cost budgets with checkpoint and resume. The LLM is [Backboard](https://backboard.io) (default `claude-haiku-5-5`); the browser is Chromium via [Playwright](https://playwright.dev).
 
+![Approval card: the agent fills the form, then asks before submitting](docs/img/approval.jpg)
+
+*The agent filled a real web form in one step, then paused with the exact values and asked for approval before submitting.*
+
 ## What it can do
 
 | Kind of task | How WebForge handles it |
@@ -93,7 +97,7 @@ In the terminal, questions and approvals pause the live view and wait for your a
 | `BACKBOARD_API_KEY` | (none) | Backboard key; can also be pasted in the web UI |
 | `WEBFORGE_PROVIDER` / `WEBFORGE_MODEL` | `anthropic` / `claude-haiku-5-5` | model routing through Backboard |
 | `WEBFORGE_BUDGET_USD` | `3.0` | hard cap on cumulative spend (ledger in `data/spend.json`) |
-| `WEBFORGE_RUN_BUDGET_USD` / `WEBFORGE_RUN_DEADLINE_S` | `0.25` / `600` | per-run budget: wrap-up at 70 %, research refused at 100 % |
+| `WEBFORGE_RUN_BUDGET_USD` / `WEBFORGE_RUN_DEADLINE_S` | `0.25` / `300` | per-run budget: wrap-up at 70 %, research refused at 100 % |
 | `WEBFORGE_APPROVAL` | `ask` | `ask` \| `auto` \| `deny` for consequential actions |
 | `WEBFORGE_ASK_TIMEOUT` | `90` | seconds to wait for your answer |
 | `WEBFORGE_VERIFY_ROUNDS` | `2` | how often the verifier may send the planner back |
