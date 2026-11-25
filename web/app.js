@@ -32,9 +32,10 @@ const finite = (n) => (n != null && n !== '' && Number.isFinite(Number(n)));
 const num = (n) => (finite(n) ? Number(n) : 0);
 const fmtNum = (n, d = 0) => num(n).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
 const fmtUsd = (n) => { const v = num(n); return '$' + v.toFixed(v > 0 && v < 0.1 ? 4 : 2); };
+const arr = (x) => (Array.isArray(x) ? x : []);
 const fmtArgs = (a) => { try { return trunc(JSON.stringify(a ?? {}), 90); } catch { return ''; } };
 
-const S = { base: '', code: '', online: false, health: null, running: false, es: null, runId: null, lastN: 0, retry: 0, rt: null, reconnecting: false };
+const S = { launchErr: '', wd: null, finishInfo: null, seen: new Set(), base: '', code: '', online: false, health: null, running: false, es: null, runId: null, lastN: 0, retry: 0, rt: null, reconnecting: false };
 
 const EXAMPLES = [
   ['class registration', 'Register the four students in this list for the science fair at http://127.0.0.1:8765/forms/register.html (student tickets, morning session, they accept the terms): Ada Lovelace ada.lovelace@school.org; Alan Turing alan.turing@school.org; Maya Rao maya@school; Grace Hopper grace.hopper@school.org. Save outputs/registrations.csv with name, email and confirmation code.'],
@@ -178,6 +179,7 @@ function updateRunButton() {
   b.disabled = S.running || !S.online || ($('#task').value.trim() === '');
   b.textContent = S.running ? 'Running...' : 'Run agent';
   if (needsKey()) { b.disabled = true; hint.textContent = 'Add your Backboard key first'; }
+  else if (S.launchErr) hint.textContent = S.launchErr;
   else if (!S.online) hint.textContent = 'Start the backend and connect to run the agent.';
   else if (S.health && S.health.browser === false) hint.textContent = 'The backend reports no browser; runs will fail.';
   else if (S.health && S.health.needs_code && !S.code) hint.textContent = 'This backend needs an access code (see Connection).';
@@ -192,6 +194,7 @@ function renderChips() {
   }
 }
 function onTaskInput() {
+  S.launchErr = '';
   $('#charcount').textContent = $('#task').value.length + '/500';
   updateRunButton();
 }
@@ -216,16 +219,16 @@ function describe(kind, d) {
     case 'task_start': return trunc(d.task, 200);
     case 'resume': return 'Resuming from checkpoint: ' + d.files + ' file(s), ' + d.todos + ' todo(s)';
     case 'search': return 'Web search: ' + trunc(d.query, 160);
-    case 'parallel': return 'Launching ' + d.n + ' sub-agents in parallel: ' + (d.agents || []).join(', ');
-    case 'read_urls': return 'Reading ' + (d.urls || []).length + ' page(s) in parallel: ' + trunc((d.urls || []).join(', '), 160);
+    case 'parallel': return 'Launching ' + trunc(d.n, 8) + ' sub-agents in parallel: ' + trunc(arr(d.agents).join(', '), 160);
+    case 'read_urls': return 'Reading ' + arr(d.urls).length + ' page(s) in parallel: ' + trunc(arr(d.urls).join(', '), 160);
     case 'delegate': return 'Delegate: ' + trunc(d.subtask, 160) + (d.start_url ? ' (start ' + d.start_url + ')' : '');
     case 'observe': return 'Look at ' + trunc(d.url || 'page', 90) + ' (' + (d.n_elements ?? '?') + ' elements)';
     case 'action': return d.action + ' ' + fmtArgs(d.args) + (d.ok === false ? '  FAILED: ' : '  ') + trunc(d.message, 140);
     case 'ask': return 'Question for you: ' + trunc(d.question, 200);
     case 'answer': return /^No answer from the user/i.test(String(d.answer || '')) ? 'No answer (timed out)' : 'Your answer: ' + trunc(d.answer, 160);
-    case 'analyze': return 'Analyst: ' + trunc(d.instruction, 140) + ' (' + (d.files || []).length + ' file(s))';
-    case 'output': return 'Deliverable saved: ' + d.name;
-    case 'verdict': return d.complete ? 'Verifier: complete' : 'Verifier: incomplete, missing ' + trunc((d.missing || []).join('; '), 160);
+    case 'analyze': return 'Analyst: ' + trunc(d.instruction, 140) + ' (' + arr(d.files).length + ' file(s))';
+    case 'output': return 'Deliverable saved: ' + trunc(d.name, 120);
+    case 'verdict': return d.complete ? 'Verifier: complete' : 'Verifier: incomplete, missing ' + trunc(arr(d.missing).join('; '), 160);
     case 'final': return 'Result ready';
     case 'agent_state': return 'state ' + d.state + (d.subtask ? ': ' + trunc(d.subtask, 120) : '') + (d.steps != null ? ' (' + d.steps + ' steps)' : '');
     case 'nudge': case 'budget': case 'verify': return trunc(d.message, 200);
@@ -517,12 +520,12 @@ const Asks = {
 };
 
 // ---- per-agent state: tiles + table ----------------------------------------
-const STATE_LABEL = Object.assign(Object.create(null), { queued: 'queued', running: 'running', waiting: 'waiting for you', done: 'done', failed: 'failed', stopped: 'stopped' });
+const STATE_LABEL = Object.assign(Object.create(null), { skipped: 'not started', queued: 'queued', running: 'running', waiting: 'waiting for you', done: 'done', failed: 'failed', stopped: 'stopped' });
 const Agents = {
   map: new Map(),
   get(id, create, state) {
-    if (!id) return null;
-    id = String(id);
+    if (typeof id !== 'string' && typeof id !== 'number') return null;
+    id = String(id); if (!id) return null;
     let a = this.map.get(id);
     if (!a && create) {
       a = { id, subtask: '', state: state || 'running', steps: 0, last: '', lastAct: Date.now(), url: '', hasShot: false };
@@ -569,7 +572,7 @@ const Agents = {
   },
   paintIdle(a) {
     const st = this.eff(a);
-    a.cIdle.textContent = (st === 'done' || st === 'failed' || st === 'stopped') ? '-' : Math.max(0, Math.round((Date.now() - a.lastAct) / 1000)) + 's';
+    a.cIdle.textContent = (st === 'done' || st === 'failed' || st === 'stopped' || st === 'skipped') ? '-' : Math.max(0, Math.round((Date.now() - a.lastAct) / 1000)) + 's';
   },
   refresh() { for (const a of this.map.values()) this.paint(a); this.counts(); },
   tickIdle() { for (const a of this.map.values()) this.paintIdle(a); },
@@ -581,7 +584,8 @@ const Agents = {
   // run is over: nothing may stay running / queued / pulsing "waiting for you"
   settle(status) {
     for (const a of this.map.values()) {
-      if (a.state === 'running' || a.state === 'queued' || a.state === 'waiting') {
+      if (a.state === 'queued') a.state = 'skipped';          // never got to run
+      else if (a.state === 'running' || a.state === 'waiting') {
         a.state = status === 'done' ? 'done' : (status === 'cancelled' ? 'stopped' : 'failed');
       }
     }
@@ -795,7 +799,7 @@ const Live = {
   reset(task, title) {
     this.actions = 0; this.lastErr = '';
     $('#metrics').hidden = false;
-    clear($('#ask-notes'));
+    clear($('#ask-notes')); $('#live-reason').textContent = ''; $('#live-err').textContent = ''; $('#live').classList.remove('has-pill');
     $('#live').hidden = false;
     $('#live-title').textContent = title;
     $('#live-task').textContent = task;
@@ -839,8 +843,9 @@ const Live = {
     }
   },
   push(ev) {
-    if (!ev || !ev.kind) return;
-    const { kind, data } = ev; const d = data || {};
+    if (!ev || typeof ev !== 'object' || ev.kind == null || ev.kind === '') return;
+    const kind = String(ev.kind); const d = ev.data && typeof ev.data === 'object' && !Array.isArray(ev.data) ? ev.data : {};
+    if (kind !== ev.kind) ev = { ...ev, kind };
     if (kind === 'metrics') { Mon.metrics(d); $('#metrics').hidden = true; return; }
     this.lastErr = kind === 'error' ? String(d.message || '') : '\0';
     Mon.cur += 1;
@@ -914,6 +919,9 @@ const Live = {
       td.firstChild.textContent = status === 'done' ? 'No plan needed: the task was simple.' : '(the run ended before a plan was made)';
     }
     Agents.settle(status);
+    for (const li of $$('#todos li.doing')) li.className = status === 'cancelled' ? 'halted' : (status === 'done' ? 'done' : 'failed');
+    if (error && error !== 'cancelled' && status !== 'done') $('#live-reason').textContent = trunc(String(error), 200);
+    Asks.say(status === 'done' ? 'Run finished' : status === 'cancelled' ? 'Run stopped' : 'Run failed' + (error ? ': ' + trunc(String(error), 120) : ''));
     if (!Mon.seen) {
       if (result) Mon.metrics({ elapsed: result.seconds, run_cost: result.cost_usd, llm_calls: result.llm_calls, tokens: result.tokens, steps: result.steps });
       else Mon.local();
@@ -937,8 +945,7 @@ const Live = {
 // ------------------------------------------------------------------ runs ---
 
 async function launch(path, body, title, task) {
-  const hint = $('#run-hint');
-  hint.textContent = '';
+  setLaunchErr('');
   S.running = true; updateRunButton();
   try {
     const r = await fetch(apiUrl(path), {
@@ -947,17 +954,25 @@ async function launch(path, body, title, task) {
     const res = await r.json().catch(() => ({}));
     if (!r.ok) {
       const msg = typeof res.detail === 'string' ? res.detail : (typeof res.error === 'string' ? res.error : (r.status === 422 ? 'Invalid task.' : 'HTTP ' + r.status));
-      hint.textContent = (r.status === 401 ? 'Access code missing or wrong. ' : '') + msg;
-      S.running = false; updateRunButton();
+      S.running = false;
+      setLaunchErr((r.status === 401 ? 'Access code missing or wrong. ' : '') + msg);
       return;
     }
-    S.runId = res.run_id; S.lastN = 0; S.retry = 0; S.reconnecting = false; clearTimeout(S.rt);
+    S.runId = res.run_id; S.retry = 0; S.reconnecting = false; S.finishInfo = null; S.seen = new Set(); S.lastN = 0; clearTimeout(S.rt);
     Live.reset(task, title);
     stream(res.run_id);
   } catch (e) {
-    hint.textContent = 'Could not reach the backend: ' + (e && e.message ? e.message : e);
-    S.running = false; updateRunButton();
+    S.running = false;
+    setLaunchErr('Could not reach the backend: ' + (e && e.message ? e.message : e));
   }
+}
+// launch/resume errors live in their own field: updateRunButton must not blank them (cleared on the next launch or edit)
+function setLaunchErr(msg) {
+  S.launchErr = msg || '';
+  updateRunButton();
+  const le = $('#live-err');
+  if (le) { le.textContent = S.launchErr; }
+  if (S.launchErr) Asks.say(S.launchErr);
 }
 
 function startRun() {
@@ -979,60 +994,106 @@ async function cancelRun() {
 
 function endRun(result, status, error) {
   if (S.es) { S.es.close(); S.es = null; }
-  clearTimeout(S.rt); S.rt = null; S.reconnecting = false;
+  clearTimeout(S.rt); S.rt = null; clearTimeout(S.wd); S.wd = null; S.reconnecting = false; S.finishInfo = null;
   S.running = false;
   Live.finish(result, status, error);
   updateRunButton();
   api('/api/health').then((h) => { S.health = h; renderConn(); }).catch(() => {});
 }
 
-// SSE: events carry a strictly increasing `n`. A dropped connection must not end the run in the UI while the server
-// run continues: reopen (the server replays from the start; events with n <= S.lastN are ignored).
+// SSE. Events carry a strictly increasing `n` (a bounded set of seen n's drops replays and duplicates, so a reopened
+// stream, which the server replays from the start, is harmless). A dropped or silent connection must not end the run
+// in the UI while the server run continues: reopen with backoff; end only when the server says the run is over.
 const RETRY_MS = [1000, 1500, 2000, 3000, 4000];
+const SILENCE_MS = 10000;      // the backend sends a `metrics` event about every second
+const SEEN_MAX = 5000;
+function arm(runId, es) {
+  clearTimeout(S.wd);
+  S.wd = setTimeout(() => {
+    if (S.es !== es || !S.running || S.runId !== runId) return;
+    es.close(); S.es = null;
+    if (S.finishInfo) { const i = S.finishInfo; endRun(i.result, i.status, i.error); return; }
+    reconnect(runId, true);
+  }, SILENCE_MS);
+}
 function stream(runId) {
   if (S.es) { S.es.close(); S.es = null; }
   const es = new EventSource(apiUrl('/api/runs/' + encodeURIComponent(runId) + '/events'));
   S.es = es;
+  arm(runId, es);
   es.onmessage = (e) => {
     if (S.es !== es) return;
     let ev; try { ev = JSON.parse(e.data); } catch { return; }
     if (!ev || typeof ev !== 'object') return;
-    S.retry = 0;
-    if (S.reconnecting) { S.reconnecting = false; Live.updateStatus(); }
-    if (typeof ev.n === 'number') { if (ev.n <= S.lastN) return; S.lastN = ev.n; }
+    arm(runId, es);
+    let isNew = true;
+    if (typeof ev.n === 'number') {
+      if (S.seen.has(ev.n)) return;
+      isNew = ev.n > S.lastN;
+      S.seen.add(ev.n);
+      if (S.seen.size > SEEN_MAX) S.seen.delete(S.seen.values().next().value);
+      if (isNew) S.lastN = ev.n;
+    }
+    if (isNew) {                                  // a genuinely new event: the connection really works
+      S.retry = 0;
+      if (S.reconnecting) { S.reconnecting = false; Live.updateStatus(); }
+    }
     Live.push(ev);
   };
   es.addEventListener('done', (e) => {
     if (S.es !== es) return;
-    let d = {}; try { d = JSON.parse(e.data); } catch { /* ignore */ }
-    endRun(d.result, d.status || 'done', d.error);
+    let d = null; try { d = JSON.parse(e.data); } catch { /* unparsable */ }
+    if (d && typeof d === 'object' && typeof d.status === 'string') { endRun(d.result, d.status, d.error); return; }
+    es.close(); S.es = null; recheck(runId);      // do not guess "done": ask the server
   });
   es.onerror = () => {
     if (S.es !== es) return;
     es.close(); S.es = null;
+    if (S.finishInfo) { const i = S.finishInfo; endRun(i.result, i.status, i.error); return; }
     reconnect(runId);
   };
 }
 
-function reconnect(runId) {
-  if (!S.running || S.runId !== runId) return;
-  if (S.retry >= RETRY_MS.length) {
-    endRun(null, 'error', 'Connection to the backend was lost. The run is checkpointed: press Resume.');
-    return;
+async function recheck(runId) {
+  try {
+    const info = await api('/api/runs/' + encodeURIComponent(runId), {}, 5000);
+    if (!S.running || S.runId !== runId) return;
+    if (info.status === 'running') { reconnect(runId, true); return; }
+    replayThenEnd(runId, info);
+  } catch (e) {
+    if (!S.running || S.runId !== runId) return;
+    endRun(null, 'error', e && e.status === 404 ? 'The backend no longer knows this run. Press Resume.' : 'Connection to the backend was lost. The run is checkpointed: press Resume.');
   }
-  const delay = RETRY_MS[S.retry++];
-  S.reconnecting = true;
-  Live.status('reconnecting');
+}
+// the run is over on the server: reopen the stream once so the events missed while disconnected are replayed
+// (the server then sends `done`); if that fails, settle from /api/runs
+function replayThenEnd(runId, info) {
+  S.finishInfo = info;
+  stream(runId);
+}
+
+function reconnect(runId, quiet) {
+  if (!S.running || S.runId !== runId) return;
+  let delay = 300;
+  if (!quiet) {
+    if (S.retry >= RETRY_MS.length) {
+      endRun(null, 'error', 'Connection to the backend was lost. The run is checkpointed: press Resume.');
+      return;
+    }
+    delay = RETRY_MS[S.retry++];
+    S.reconnecting = true;
+    Live.status('reconnecting');
+  }
   clearTimeout(S.rt);
   S.rt = setTimeout(async () => {
     if (!S.running || S.runId !== runId) return;
     try {
       const info = await api('/api/runs/' + encodeURIComponent(runId), {}, 5000);
       if (!S.running || S.runId !== runId) return;
-      if (info.status !== 'running') { endRun(info.result, info.status, info.error); return; }
+      if (info.status !== 'running') { replayThenEnd(runId, info); return; }
     } catch (e) {
       if (e && e.status === 404) { endRun(null, 'error', 'The backend no longer knows this run. Press Resume.'); return; }
-      // unreachable right now: try to reopen the stream anyway, the next error counts as another retry
+      if (quiet) S.retry++;          // unreachable right now: this counts like any other failed attempt
     }
     if (S.running && S.runId === runId) stream(runId);
   }, delay);

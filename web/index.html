@@ -104,12 +104,14 @@
       <h2 id="live-title">Live run</h2>
       <span class="badge" id="live-status">idle</span>
       <span class="muted mono" id="live-clock">0.0s</span>
+      <span class="small a-err" id="live-reason"></span>
       <button class="btn ghost small danger" id="btn-cancel" type="button" hidden>Stop</button>
       <button class="btn small" id="btn-resume" type="button" hidden>Resume</button>
     </div>
     <p class="task-line" id="live-task"></p>
+    <p class="small a-err" id="live-err" role="alert"></p>
 
-    <div id="ask-notes" class="ask-notes" aria-hidden="true"></div>
+    <div id="ask-notes" class="ask-notes"></div>
     <div id="asks" class="asks"></div>
 
     <div class="card mission" id="mission" hidden>
