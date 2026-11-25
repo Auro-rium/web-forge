@@ -39,14 +39,22 @@ OBSERVE_JS = r"""
   };
   const nameOf = e => {
     const tag = e.tagName.toLowerCase();
-    const cands = [
+    const field = (tag === 'input' && !['submit', 'button', 'reset', 'image'].includes((e.type || '').toLowerCase()))
+                  || tag === 'select' || tag === 'textarea';
+    const lbl = e.labels && e.labels.length ? e.labels[0].innerText : '';
+    const cands = field ? [
       ['aria', e.getAttribute('aria-label')],
-      ['text', tag === 'input' || tag === 'select' || tag === 'textarea' ? '' : e.innerText],
-      ['title', e.getAttribute('title')],
+      ['label', lbl],
       ['placeholder', e.getAttribute('placeholder')],
+      ['title', e.getAttribute('title')],
+      ['attr', e.getAttribute('name')],
+    ] : [
+      ['aria', e.getAttribute('aria-label')],
+      ['text', e.innerText],
+      ['title', e.getAttribute('title')],
       ['alt', e.getAttribute('alt') || (e.querySelector('img[alt]') || {}).alt],
-      ['value', tag === 'select' ? '' : e.value],
-      ['label', e.labels && e.labels.length ? e.labels[0].innerText : ''],
+      ['value', e.value],
+      ['label', lbl],
     ];
     for (const [src, v] of cands) { const n = norm(v); if (n) return [n, src]; }
     return ['', ''];
@@ -69,6 +77,16 @@ OBSERVE_JS = r"""
     }
     return parts.join(' > ');
   };
+  const infoOf = e => {
+    const tag = e.tagName.toLowerCase(), t = (e.getAttribute('type') || '').toLowerCase(), bits = [];
+    if (tag === 'input' && t && !['text', 'submit', 'button'].includes(t)) bits.push(t);
+    if (e.required || e.getAttribute('aria-required') === 'true') bits.push('required');
+    if (e.disabled) bits.push('disabled');
+    if (tag === 'select') bits.push('options=' + JSON.stringify([...e.options].slice(0, 15).map(o => norm(o.text))));
+    if (e.getAttribute('aria-invalid') === 'true' || (e.willValidate && e.value && !e.checkValidity())) bits.push('INVALID');
+    if (tag === 'button' && (e.type || '') === 'submit' || (tag === 'input' && t === 'submit')) bits.push('submit');
+    return bits.join(', ');
+  };
   const nodes = [...document.querySelectorAll(SEL)].filter(vis).slice(0, maxEl);
   const items = nodes.map((e, i) => {
     e.setAttribute('data-wf-idx', i);
@@ -77,7 +95,9 @@ OBSERVE_JS = r"""
     const [full, src] = nameOf(e);
     const name = full.length > 80 ? full.slice(0, 79) + '…' : full;
     return { idx: i, tag, role, lrole, name, full, src, el: e,
-             value: tag === 'input' && ['checkbox', 'radio'].includes((e.type || '')) ? (e.checked ? 'checked' : '') : (e.value || ''),
+             value: tag === 'input' && ['checkbox', 'radio'].includes((e.type || '')) ? (e.checked ? 'checked' : '')
+                    : ((e.type || '') === 'password' ? (e.value ? '•••' : '') : (e.value || '')),
+             info: infoOf(e),
              href: tag === 'a' ? (e.href || '') : '' };
   });
   const count = (f) => { const m = {}; items.forEach(it => { const k = f(it); m[k] = (m[k] || 0) + 1; }); return m; };
@@ -93,9 +113,17 @@ OBSERVE_JS = r"""
     else if (input && it.el.getAttribute('placeholder')) loc = { placeholder: it.el.getAttribute('placeholder') };
     else if (it.src === 'text' && !trunc(it) && byText[it.full] === 1) loc = { text: it.full };
     else loc = { css: cssPath(it.el) };
-    return { idx: it.idx, tag: it.tag, role: it.role, name: it.name, locator: loc, value: it.value.slice(0, 80), href: it.href };
+    if (it.info.includes('submit')) loc = { ...loc, submit: true };
+    return { idx: it.idx, tag: it.tag, role: it.role, name: it.name, locator: loc, value: it.value.slice(0, 80),
+             href: it.href, info: it.info };
   });
-  return { url: location.href, title: document.title, elements,
+  const errSel = '[role=alert], .error, .errors, .invalid-feedback, .field-error, .help-block.error, [aria-live=assertive]';
+  const errors = [...document.querySelectorAll(errSel)].filter(vis).map(x => norm(x.innerText)).filter(Boolean);
+  document.querySelectorAll('input, select, textarea').forEach(x => {
+    if (x.willValidate && x.dataset.wfTouched === '1' && !x.checkValidity() && x.validationMessage)
+      errors.push((nameOf(x)[0] || x.name || 'field') + ': ' + x.validationMessage);
+  });
+  return { url: location.href, title: document.title, elements, errors: [...new Set(errors)].slice(0, 12),
            text: norm(document.body ? document.body.innerText : '') };
 }
 """
@@ -104,7 +132,7 @@ OBSERVE_JS = r"""
 async def observe_page(page) -> Observation:
     d = await page.evaluate(OBSERVE_JS, MAX_ELEMENTS)
     return Observation(url=d["url"], title=d["title"], elements=[El(**e) for e in d["elements"]],
-                       text=d["text"][:MAX_TEXT])
+                       text=d["text"][:MAX_TEXT], errors=d.get("errors") or [])
 
 
 async def page_text(page, max_chars: int = 4000) -> str:

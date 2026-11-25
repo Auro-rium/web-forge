@@ -17,8 +17,8 @@ services:
       WEBFORGE_MODEL: ${WEBFORGE_MODEL:-claude-haiku-5-5}
       WEBFORGE_BUDGET_USD: ${WEBFORGE_BUDGET_USD:-3.0}
     volumes:
-      - webforge-data:/app/data        # skills, memory mirror, spend ledger, saved key
-      - webforge-runs:/app/runs        # run recordings
+      - webforge-data:/app/data        # spend ledger, saved Backboard key
+      - webforge-runs:/app/runs        # runs: events, checkpoints (resume), deliverables
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4).status == 200 else 1)"]
       interval: 30s

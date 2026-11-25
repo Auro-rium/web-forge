@@ -6,7 +6,7 @@
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#0a0b0e">
 <title>WebForge</title>
-<meta name="description" content="Watch a web-browsing deep agent learn reusable skills and get faster, cheaper and more reliable with every task.">
+<meta name="description" content="An autonomous computer-use agent: tell it the job, it plans, works the web with parallel sub-agents, asks before anything consequential, checks its own result and hands back files.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23080a10'/%3E%3Cpath d='M5 9h22M5 16h14M5 23h22' stroke='%238ea6ff' stroke-width='3'/%3E%3Crect x='22' y='13' width='5' height='6' fill='%23ffb454'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -22,8 +22,6 @@
     </a>
     <nav class="tabs" id="tabs" role="tablist" aria-label="Sections">
       <button role="tab" data-tab="run" aria-selected="true">run</button>
-      <button role="tab" data-tab="learning" aria-selected="false">learning</button>
-      <button role="tab" data-tab="library" aria-selected="false">skills &amp; memory</button>
       <button role="tab" data-tab="arch" aria-selected="false">architecture</button>
     </nav>
     <span class="pill" id="conn-pill" title="Backend connection"><i class="dot"></i><span id="conn-text">checking...</span></span>
@@ -35,27 +33,15 @@
 <!-- ================================ RUN ================================ -->
 <section id="tab-run" class="panel" role="tabpanel">
   <div class="hero">
-    <p class="prompt" aria-hidden="true"><span class="ps">$</span> webforge run <span class="flag">--learn</span><i class="caret"></i></p>
-    <h1 id="hero-title" aria-label="Browse once. Replay it cheap."><span class="l1" data-t="Browse once.">Browse once.</span><span class="l2" data-t="Replay it cheap.">Replay it cheap.</span></h1>
-    <p class="lead">WebForge drives a real browser through a task, then compiles what worked into a <b>skill</b> it can replay with no LLM calls, and writes down <b>lessons</b> for next time.</p>
-
-    <div class="stage" id="stage" role="img" aria-label="Animated illustration: a first-time run wanders through eight steps, a run that reuses a learned skill finishes in two.">
-      <figure class="pane cold">
-        <figcaption><span class="k"><i></i>first time</span><em>no skill yet</em><b id="cold-n">steps 0</b></figcaption>
-        <pre id="pane-cold" aria-hidden="true"></pre>
-      </figure>
-      <figure class="pane learned">
-        <figcaption><span class="k"><i></i>skill reused</span><em>list_books(category)</em><b id="learned-n">steps 0</b></figcaption>
-        <pre id="pane-learned" aria-hidden="true"></pre>
-      </figure>
-    </div>
-    <p class="stage-note">Illustration of the mechanism, not a recording. Measured numbers below.</p>
-    <div class="strip" id="strip" aria-live="polite"></div>
+    <p class="prompt" aria-hidden="true"><span class="ps">$</span> webforge run <span class="flag">"do the job"</span><i class="caret"></i></p>
+    <h1 id="hero-title" aria-label="Tell it the job. It works the web."><span class="l1" data-t="Tell it the job.">Tell it the job.</span><span class="l2" data-t="It works the web.">It works the web.</span></h1>
+    <p class="lead">WebForge is an autonomous computer-use agent. It plans, sends <b>parallel sub-agents</b> into real browser tabs to search, read, click and fill forms, <b>asks you</b> before anything consequential, <b>checks its own result</b>, and hands back an answer plus files.</p>
+    <pre class="loop" id="loop" aria-hidden="true"></pre>
   </div>
 
   <div id="offline-banner" class="banner warn" hidden>
-    <b>No live backend connected.</b>
-    The agent needs a Python backend with Chromium. You can still <a href="#replay" id="to-replay">replay a recorded run</a> and explore the results, skills and architecture below, or enter your backend URL.
+    <b>No backend connected.</b> The agent runs in a Python backend with Chromium on your machine
+    (<code>python -m webforge serve</code> or <code>docker compose up</code>). Enter its URL under Connection.
   </div>
 
   <section id="keycard" class="keycard card" hidden>
@@ -74,7 +60,7 @@
     <summary>Connection <span class="muted" id="conn-summary"></span></summary>
     <div class="row">
       <label class="grow">Backend URL <span class="muted">(empty = this site)</span>
-        <input id="backend" type="url" inputmode="url" placeholder="https://your-webforge-backend.onrender.com" autocomplete="off" spellcheck="false">
+        <input id="backend" type="url" inputmode="url" placeholder="http://localhost:8000" autocomplete="off" spellcheck="false">
       </label>
       <button class="btn" id="btn-connect" type="button">Connect</button>
     </div>
@@ -87,16 +73,24 @@
     <button class="btn ghost danger small" id="btn-forgetkey" type="button" hidden>Forget saved key</button>
   </details>
 
+  <details class="card" id="secrets-card">
+    <summary>Secrets <span class="muted" id="secrets-summary">(for logins; the model never sees values)</span></summary>
+    <p class="small muted">Add a password once, e.g. name <code>github_pw</code>. In a task say "log in with the secret github_pw";
+      the agent types <code>{{secret:github_pw}}</code>, the browser fills the real value, and it is hidden from logs and the model. Kept in server memory only.</p>
+    <div class="row wrap-r">
+      <label>Name <input id="secret-name" autocomplete="off" spellcheck="false" placeholder="github_pw"></label>
+      <label class="grow">Value <input id="secret-value" type="password" autocomplete="off"></label>
+      <button class="btn" id="btn-secret" type="button">Add</button>
+    </div>
+    <p class="small" id="secret-status" role="status"></p>
+  </details>
+
   <div class="card">
     <h2>Task</h2>
     <div id="chips" class="chips" aria-label="Example tasks"></div>
-    <textarea id="task" rows="3" maxlength="500" placeholder="e.g. List the titles and prices of the 3 cheapest books in the 'Poetry' category on https://books.toscrape.com"></textarea>
+    <textarea id="task" rows="3" maxlength="500" placeholder="e.g. Compare 3 student laptops under $1000, recommend one and save a CSV"></textarea>
     <div class="row between wrap-r">
-      <div class="toggles">
-        <label class="tog"><input type="checkbox" id="opt-learn" checked><span>Learn</span></label>
-        <label class="tog"><input type="checkbox" id="opt-skills" checked><span>Use skills</span></label>
-        <label class="tog"><input type="checkbox" id="opt-memory" checked><span>Use memory</span></label>
-      </div>
+      <span class="muted small">Submitting, sending, logging in or deleting always asks you first. Payments are never possible.</span>
       <div class="row">
         <span class="muted small" id="charcount">0/500</span>
         <button class="btn primary" id="btn-run" type="button">Run agent</button>
@@ -110,8 +104,21 @@
       <h2 id="live-title">Live run</h2>
       <span class="badge" id="live-status">idle</span>
       <span class="muted mono" id="live-clock">0.0s</span>
+      <button class="btn ghost small danger" id="btn-cancel" type="button" hidden>Stop</button>
+      <button class="btn small" id="btn-resume" type="button" hidden>Resume</button>
     </div>
     <p class="task-line" id="live-task"></p>
+
+    <div class="card ask" id="ask-card" hidden role="alertdialog" aria-labelledby="ask-q">
+      <h3>WebForge needs you <span class="muted mono small" id="ask-timer"></span></h3>
+      <p id="ask-q" class="ask-q"></p>
+      <div class="row wrap-r" id="ask-options"></div>
+      <div class="row">
+        <input id="ask-text" class="grow" autocomplete="off" placeholder="or type an answer">
+        <button class="btn primary" id="btn-ask-send" type="button">Send</button>
+      </div>
+    </div>
+
     <div class="live-grid">
       <div class="col">
         <div class="card">
@@ -119,13 +126,8 @@
           <ul id="todos" class="todos"><li class="muted">waiting for the plan...</li></ul>
         </div>
         <div class="card">
-          <h3>Skills</h3>
-          <div id="skill-chips" class="chips"><span class="muted small">none yet</span></div>
-        </div>
-        <div class="card">
-          <h3>Memory</h3>
-          <div id="mem-hits" class="mem-hits muted small">no memory recalled</div>
-          <ul id="lessons" class="lessons"></ul>
+          <h3>Browser <span class="muted small">(live view of each sub-agent)</span></h3>
+          <div id="shots" class="shots"><span class="muted small">no browser activity yet</span></div>
         </div>
       </div>
       <div class="col">
@@ -136,90 +138,24 @@
       </div>
     </div>
     <div class="card answer" id="answer-card" hidden>
-      <h3>Final answer <span class="badge" id="answer-badge"></span></h3>
+      <h3>Result <span class="badge" id="answer-badge"></span> <span class="badge" id="verify-badge" hidden></span></h3>
+      <p class="small muted" id="verify-note" hidden></p>
       <pre id="answer" class="answer-text"></pre>
+      <div id="files" class="files" hidden></div>
     </div>
     <div class="metrics" id="metrics"></div>
   </div>
-
-  <div class="card" id="replay">
-    <details id="replay-det">
-      <summary><b>Replay a recorded run</b> <span class="muted small">(works without a backend)</span></summary>
-      <div class="row wrap-r replay-ctl">
-        <label>Run
-          <select id="demo-select"></select>
-        </label>
-        <button class="btn" id="btn-play" type="button">Play</button>
-        <button class="btn ghost" id="btn-restart" type="button">Restart</button>
-        <label>Speed
-          <select id="demo-speed">
-            <option value="0.5">0.5x</option>
-            <option value="1" selected>1x</option>
-            <option value="2">2x</option>
-            <option value="4">4x</option>
-          </select>
-        </label>
-      </div>
-      <p class="muted small" id="demo-note"></p>
-    </details>
-  </div>
-</section>
-
-<!-- ============================== LEARNING ============================== -->
-<section id="tab-learning" class="panel" role="tabpanel" hidden>
-  <h1 class="sec">Does it actually get better?</h1>
-  <p class="lead">Each task family is run twice: <b>cold</b> (no skills, no memory, fresh start every task) and <b>learned</b> (skills and lessons carry over). Same tasks, same model.</p>
-  <div id="bench-banner" class="banner info" hidden></div>
-  <div id="bench-hero" class="stats"></div>
-  <div id="bench-charts" class="charts"></div>
-  <div class="card">
-    <h3>Per task</h3>
-    <div class="table-wrap"><table id="bench-table" class="tbl"></table></div>
-  </div>
-  <div class="card explain">
-    <h3>How the learning loop works</h3>
-    <ol class="loop">
-      <li><b>Explore.</b> On a new kind of task the worker drives the browser step by step with an LLM and the page's interactive elements.</li>
-      <li><b>Distil.</b> Every action is recorded with a robust locator. A builder turns a successful trace into a parameterised skill, for example <code>list_books(category)</code>, and checks it replays.</li>
-      <li><b>Remember.</b> A reflector stores short lessons (site structure, pitfalls) in long-term memory.</li>
-      <li><b>Reuse.</b> Next time the planner sees the skill catalog and the recalled lessons. A matching skill runs without any browsing LLM calls; failures fall back to exploring and repair the skill.</li>
-    </ol>
-  </div>
-</section>
-
-<!-- ============================ SKILLS & MEMORY ============================ -->
-<section id="tab-library" class="panel" role="tabpanel" hidden>
-  <h1 class="sec">Skills &amp; memory</h1>
-  <p class="lead">What the agent has learned so far. Skills are replayable procedures; memory holds lessons and notes recalled on future tasks.</p>
-  <div id="lib-banner" class="banner info" hidden></div>
-  <div class="row between wrap-r">
-    <h2>Skills <span class="muted" id="skills-count"></span></h2>
-    <button class="btn ghost danger" id="btn-reset-mem" type="button" hidden>Reset memory</button>
-  </div>
-  <div id="skills" class="cards"></div>
-  <div class="row between wrap-r">
-    <h2>Memory <span class="muted" id="mem-count"></span></h2>
-    <label class="inline">Show
-      <select id="mem-filter">
-        <option value="">everything</option>
-        <option value="lesson">lessons</option>
-        <option value="skill">skill notes</option>
-        <option value="failure">failures</option>
-      </select>
-    </label>
-  </div>
-  <div id="memory" class="cards one"></div>
 </section>
 
 <!-- ============================== ARCHITECTURE ============================== -->
 <section id="tab-arch" class="panel" role="tabpanel" hidden>
   <h1 class="sec">Architecture</h1>
-  <p class="lead">A planner delegates browsing to a worker. Successful traces become skills; reflections become memory. Both feed the next run.</p>
+  <p class="lead">A planner breaks the job down and delegates. Sub-agents work in parallel, each in its own context and browser tab. Consequential actions wait for you; a verifier checks the result before it is returned.</p>
   <div class="arch">
     <figure class="diagram">
       <svg id="arch-svg" viewBox="0 0 530 500" role="img" aria-labelledby="arch-t arch-d">
         <title id="arch-t">WebForge architecture</title>
-        <desc id="arch-d">A task goes to the planner. The planner delegates browsing to the worker, which drives the browser. Worker traces go to the skill builder and then to the skill library; the reflector writes lessons to memory; the planner reads both.</desc>
+        <desc id="arch-d">Your task goes to the planner. The planner uses web search, an analyst and a verifier, writes to a workspace, and delegates to parallel browser workers. Workers act in their own tabs through a safety gate that asks you before consequential actions.</desc>
         <defs>
           <marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="arrowhead"/></marker>
         </defs>
@@ -227,36 +163,34 @@
           <path d="M265 46V80" marker-end="url(#ah)"/>
           <path d="M150 112H122" marker-end="url(#ah)" marker-start="url(#ah)"/>
           <path d="M370 112H395" marker-end="url(#ah)" marker-start="url(#ah)"/>
-          <path d="M260 144V200" marker-end="url(#ah)"/>
+          <path d="M260 144V200" marker-end="url(#ah)" marker-start="url(#ah)"/>
           <path d="M260 264V320" marker-end="url(#ah)" marker-start="url(#ah)"/>
           <path d="M260 384V440" marker-end="url(#ah)"/>
-          <path d="M370 232H395" marker-end="url(#ah)"/>
-          <path d="M445 200V144" marker-end="url(#ah)" class="learn"/>
-          <path d="M150 232H120" marker-end="url(#ah)"/>
-          <path d="M65 200V144" marker-end="url(#ah)" class="learn"/>
-          <path d="M495 112H512V352H462" marker-end="url(#ah)" class="learn dashed"/>
+          <path d="M370 232H395" marker-end="url(#ah)" class="learn"/>
+          <path d="M150 232H120" marker-end="url(#ah)" marker-start="url(#ah)"/>
+          <path d="M445 200V144" marker-end="url(#ah)" class="learn dashed"/>
         </g>
         <g class="nodes">
           <g class="n task"><rect x="185" y="10" width="160" height="36" rx="18"/><text x="265" y="33" text-anchor="middle" class="t">Your task</text></g>
-          <g class="n core"><rect x="150" y="80" width="220" height="64" rx="12"/><text x="260" y="107" text-anchor="middle" class="t">Planner</text><text x="260" y="127" text-anchor="middle" class="s">todos, scratch files, delegation</text></g>
-          <g class="n mem"><rect x="10" y="80" width="110" height="64" rx="12"/><text x="65" y="107" text-anchor="middle" class="t">Memory</text><text x="65" y="127" text-anchor="middle" class="s">Backboard</text></g>
-          <g class="n lib"><rect x="395" y="80" width="100" height="64" rx="12"/><text x="445" y="107" text-anchor="middle" class="t">Skill library</text><text x="445" y="127" text-anchor="middle" class="s">replayable</text></g>
-          <g class="n core"><rect x="150" y="200" width="220" height="64" rx="12"/><text x="260" y="227" text-anchor="middle" class="t">Worker</text><text x="260" y="247" text-anchor="middle" class="s">observe, think, act</text></g>
-          <g class="n learnbox"><rect x="10" y="200" width="110" height="64" rx="12"/><text x="65" y="227" text-anchor="middle" class="t">Reflector</text><text x="65" y="247" text-anchor="middle" class="s">lessons</text></g>
-          <g class="n learnbox"><rect x="395" y="200" width="100" height="64" rx="12"/><text x="445" y="227" text-anchor="middle" class="t">Skill builder</text><text x="445" y="247" text-anchor="middle" class="s">trace to skill</text></g>
-          <g class="n browser"><rect x="60" y="320" width="400" height="64" rx="12"/><text x="260" y="347" text-anchor="middle" class="t">Browser</text><text x="260" y="367" text-anchor="middle" class="s">Playwright, Chromium, domain allowlist, safety checks</text></g>
+          <g class="n core"><rect x="150" y="80" width="220" height="64" rx="12"/><text x="260" y="107" text-anchor="middle" class="t">Planner</text><text x="260" y="127" text-anchor="middle" class="s">todos, budget, checkpoints</text></g>
+          <g class="n mem"><rect x="10" y="80" width="110" height="64" rx="12"/><text x="65" y="107" text-anchor="middle" class="t">Workspace</text><text x="65" y="127" text-anchor="middle" class="s">files, outputs/</text></g>
+          <g class="n lib"><rect x="395" y="80" width="100" height="64" rx="12"/><text x="445" y="107" text-anchor="middle" class="t">Verifier</text><text x="445" y="127" text-anchor="middle" class="s">checks result</text></g>
+          <g class="n core"><rect x="150" y="200" width="220" height="64" rx="12"/><text x="260" y="227" text-anchor="middle" class="t">Workers ×N</text><text x="260" y="247" text-anchor="middle" class="s">own thread + own tab each</text></g>
+          <g class="n learnbox"><rect x="10" y="200" width="110" height="64" rx="12"/><text x="65" y="227" text-anchor="middle" class="t">Search · Analyst</text><text x="65" y="247" text-anchor="middle" class="s">sub-agents</text></g>
+          <g class="n learnbox"><rect x="395" y="200" width="100" height="64" rx="12"/><text x="445" y="227" text-anchor="middle" class="t">You</text><text x="445" y="247" text-anchor="middle" class="s">approve, answer</text></g>
+          <g class="n browser"><rect x="60" y="320" width="400" height="64" rx="12"/><text x="260" y="347" text-anchor="middle" class="t">Browser + safety gate</text><text x="260" y="367" text-anchor="middle" class="s">Chromium tabs · allow / ask / block · secrets</text></g>
           <g class="n task"><rect x="190" y="440" width="140" height="36" rx="18"/><text x="260" y="463" text-anchor="middle" class="t">The web</text></g>
         </g>
       </svg>
     </figure>
     <ol class="captions">
-      <li><b>Planner</b> keeps a todo list and scratch files, recalls lessons, checks the skill catalog and decides what to delegate.</li>
-      <li><b>Worker</b> sees a compact view of the page (interactive elements and text) and acts one step at a time.</li>
-      <li><b>Browser</b> executes actions in headless Chromium. Navigation off the allowlist and risky actions (passwords, purchases) are blocked.</li>
-      <li><b>Skill builder</b> converts a successful action trace into a parameterised, replayable skill and verifies it.</li>
-      <li><b>Skill library</b> stores skills. The planner runs one with <code>run_skill</code>, replaying it with zero browsing LLM calls (dashed line).</li>
-      <li><b>Reflector</b> distils what worked and what failed into short lessons.</li>
-      <li><b>Memory</b> (Backboard, with a local mirror) recalls those lessons at the start of related tasks.</li>
+      <li><b>Planner</b> keeps a todo list, a time and dollar budget, and a checkpoint after every round, so an interrupted run can resume.</li>
+      <li><b>Workers</b> each get one subtask, a fresh LLM thread and their own browser tab; independent subtasks run in parallel.</li>
+      <li><b>Browser + safety gate:</b> reading and navigation are allowed, submitting, sending, logging in and deleting <b>ask you</b>, payments are <b>blocked</b>. Passwords are typed from secrets the model never sees.</li>
+      <li><b>Search and analyst</b> sub-agents: parallel web search with sources, and synthesis over workspace files in a separate context (comparisons, decisions, CSV).</li>
+      <li><b>Workspace</b>: large results are saved to files instead of filling the planner's context; deliverables go to <code>outputs/</code>.</li>
+      <li><b>Verifier</b> checks the final answer against every part of the task and sends the planner back if something is missing.</li>
+      <li><b>You</b> answer questions and approvals from this page or the terminal; no answer in time means it proceeds safely or skips the action.</li>
     </ol>
   </div>
 </section>
@@ -264,8 +198,8 @@
 </main>
 
 <footer class="wrap foot">
-  <pre class="ascii-foot" aria-hidden="true">  ┌─ observe ─▸ act ─▸ trace ─▸ skill ─▸ replay ─┐
-  └──────────────────── lessons ◂────────────────┘</pre>
+  <pre class="ascii-foot" aria-hidden="true">  ┌─ plan ─▸ parallel agents ─▸ act ─▸ ask you ─▸ verify ─┐
+  └─────────────────────── deliver ◂──────────────────────┘</pre>
   <p class="muted small">Agent output is untrusted, so everything on this page is rendered as plain text.</p>
 </footer>
 <noscript><p class="wrap">This page needs JavaScript.</p></noscript>

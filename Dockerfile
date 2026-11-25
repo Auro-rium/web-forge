@@ -25,7 +25,6 @@ RUN pip install -r requirements.txt \
     && chmod -R a+rX /ms-playwright
 
 COPY webforge ./webforge
-COPY bench ./bench
 COPY fixtures ./fixtures
 COPY web ./web
 

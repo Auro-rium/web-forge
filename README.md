@@ -1,50 +1,40 @@
 # WebForge
 
-**A web-browsing deep agent that turns what worked into reusable skills, so repeated tasks get cheaper and faster.**
+**An autonomous computer-use agent.** Tell it the job in plain language: "fill in this registration form", "compare these three plans and recommend one with a table", "summarize today's top Hacker News stories". It plans, sends parallel sub-agents into real browser tabs to search, read, click and fill forms, **asks you before anything consequential**, **checks its own result**, and hands back an answer plus files.
 
-![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
-![tests](https://img.shields.io/badge/tests-50%20passed%2C%201%20skipped-brightgreen)
-![license MIT](https://img.shields.io/badge/license-MIT-lightgrey)
+Built as a *deep agent*: a planner with a todo list and a file workspace, specialised sub-agents with their own context, parallel execution, a human-in-the-loop safety gate, a verifier, and time/cost budgets with checkpoint and resume. The LLM is [Backboard](https://backboard.io) (default `claude-haiku-5-5`); the browser is Chromium via [Playwright](https://playwright.dev).
 
-## What it is
+## What it can do
 
-WebForge is a general-purpose web agent: a planner that searches, reads and browses the open web, and fans work out to parallel browsing sub-agents, each in its own Chromium tab (Playwright), using an LLM served by [Backboard](https://backboard.io). When a browsing subtask succeeds, WebForge compiles the recorded trace into a small parameterised JSON *skill*, checks it by replaying it, and saves it; the next similar task runs that skill with no browsing LLM. Discovery goes through web search (several queries in parallel), known pages are read in parallel tabs with selector-free readers (main text, tables, links, JSON-LD), and large results are offloaded to workspace files so long tasks do not overflow the context. A reflector also stores short lessons in memory, and a hard dollar cap plus action-level safety checks (and an optional domain allowlist) keep runs cheap and contained. It comes with a live web UI, a CLI, an offline test suite, and a cold-vs-learned benchmark.
+| Kind of task | How WebForge handles it |
+|---|---|
+| Fill and submit web forms | A worker fills every field in one step by label (`fill_form`), reads validation errors and fixes them, then **asks you to approve** the submit and shows you the values. |
+| Log in somewhere | You store the password once as a **secret**; the agent types `{{secret:name}}`, the browser fills the real value, the model and the logs never see it. Logging in needs your approval. |
+| Research, compare, decide | Parallel web searches and parallel page reads; an **analyst** sub-agent builds the comparison or decision from the saved pages in its own context; results saved as `outputs/*.md` / `*.csv`. |
+| Multi-site / multi-item work | `parallel_browse` runs several browsing sub-agents at once, each with its own LLM thread and its own tab. |
+| Long jobs | Per-run time and $ budget (wrap-up at 70 %, hard stop at 100 %), checkpoint after every round, **resume** after a crash or a stop. |
+| Anything it cannot do | Payments are always blocked. Captchas, bot walls and logins without a secret are reported honestly instead of guessed. |
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    U["User: CLI or web UI"] --> P["Planner"]
-    P -->|"web_search (N queries)"| WS["Backboard web search"]
-    P -->|"read_urls (N tabs)"| RU["Readers: text, tables, links, JSON-LD"]
-    P -->|"delegate_browse / parallel_browse"| W["Workers: own LLM thread + own tab each"]
-    P <-->|offload / read_file| FS[("Run workspace files")]
-    P -->|run_skill| R["Skill replay (no LLM)"]
-    W --> B["Browser: Playwright + Chromium"]
-    R --> B
-    W -->|successful trace| SB["Skill builder"]
-    SB -->|validate by replay| B
-    SB --> L[("Skill library: data/skills")]
-    L -->|catalogue| P
-    P -->|after run| RF["Reflector"]
-    RF --> M[("Memory: Backboard + local mirror")]
-    M -->|lessons| P
-    M -->|hints| W
-    P & W & SB & RF --> LLM["Backboard LLM, one assistant per role"]
-    LLM --> G[("Spend ledger: hard cap")]
+    U["You: web UI or CLI"] --> P["Planner<br/>todos · budget · checkpoints"]
+    P <-->|files| WS[("Workspace<br/>results/ pages/ outputs/")]
+    P -->|"web_search (parallel)"| SE["Search sub-agent<br/>Backboard web search"]
+    P -->|"read_urls (parallel tabs)"| RD["Readers: text, tables, links, JSON-LD"]
+    P -->|"delegate_browse / parallel_browse"| W["Workers ×N<br/>own LLM thread + own tab"]
+    P -->|analyze| AN["Analyst sub-agent<br/>separate context"]
+    P -->|final_answer| VF["Verifier sub-agent"]
+    VF -->|"missing parts"| P
+    W --> G{"Safety gate<br/>allow · ask · block"}
+    G -->|ask| U
+    G --> B["Chromium tabs"]
+    B --> WEB(("The web"))
+    P & W & AN & VF & SE --> LLM["Backboard LLM<br/>$ ledger + hard cap"]
 ```
 
-Details, sequence diagram and design decisions: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
-## How it improves itself
-
-1. **Skill building.** After a worker finishes a subtask successfully, a builder LLM turns the successful steps into a skill: task-specific values (a category name, a search term) become `{param}` templates, and each click carries a robust locator (role+name, placeholder, text, or CSS).
-2. **Replay validation.** A candidate skill is saved only if it replays successfully in the live browser with its example parameters. If replay fails, it gets one LLM repair round; otherwise it is discarded.
-3. **Reuse.** The planner sees a catalogue of skills and prefers `run_skill`, which executes the steps and extraction without any browsing LLM.
-4. **Memory lessons.** After each run a reflector stores 1-3 general lessons (site structure, selectors, pitfalls) that are retrieved for later planning and browsing. Successes and failures are both recorded.
-5. **Repair and demotion.** If a skill breaks at run time, WebForge asks the LLM to fix the failing step, re-validates, and bumps the skill version. A skill with at least 3 uses and under 50% success is demoted (hidden from the planner, kept on disk).
-
-Nothing about the model changes; the improvement comes from stored skills and retrieved text.
+Details, tool tables, run sequence and design decisions: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Live-demo script: [docs/DEMO.md](docs/DEMO.md).
 
 ## Docker (recommended for a first run)
 
@@ -53,13 +43,12 @@ git clone https://github.com/Auro-rium/web-forge.git && cd web-forge
 docker compose up --build
 ```
 
-Open <http://localhost:8000>, paste your [Backboard](https://backboard.io) API key into the "Connect Backboard" card, and run a task. No `.env` editing is needed. If `BACKBOARD_API_KEY` is set in your shell or a `.env` file next to `docker-compose.yml`, it is used instead and the card does not appear (precedence: environment variable, then the key saved from the web page, then none).
+Open <http://localhost:8000>, paste your [Backboard](https://backboard.io) API key into the "Connect Backboard" card, and run a task. If `BACKBOARD_API_KEY` is set in your shell or a `.env` file, it is used instead (precedence: environment variable, then the key saved from the web page).
 
-- **Where the key goes.** The page sends it to your local server, which checks it with a cheap Backboard call and stores it in `data/backboard_key` (mode 0600) inside the `webforge-data` volume. It is never returned by the API. The port is published on `127.0.0.1` only, and the save-key endpoint is only enabled because compose sets `WEBFORGE_LOCAL=1`; do not publish the port on other interfaces without also setting `WEBFORGE_ACCESS_CODE`. "Forget saved key" (under Connection) deletes it.
-- **What persists.** Two named volumes: `webforge-data` (learned skills, memory mirror, spend ledger, saved key) and `webforge-runs` (run recordings). They survive `docker compose down` and restarts. Reset everything, including the spend cap ledger, with `docker compose down -v`.
-- **Headless.** Docker has no display, so the web UI runs Chromium headless there. To watch the browser window (e.g. for a live demo), run on the host instead (see the next section) with `python -m webforge serve --headed`.
-- **Settings.** `WEBFORGE_MODEL`, `WEBFORGE_PROVIDER` and `WEBFORGE_BUDGET_USD` pass through from your environment (defaults: `claude-haiku-5-5`, `anthropic`, `3.0`).
-- **Troubleshooting.** Port 8000 in use: change the left side of `127.0.0.1:8000:8000` in `docker-compose.yml`. Chromium crashes: keep `shm_size: 1gb`. Anything else: `docker compose logs -f` (also `make docker-up`, `make docker-down`, `make docker-logs`).
+- **Where the key goes.** The page sends it to your local server, which checks it with Backboard and stores it in `data/backboard_key` (mode 0600). It is never returned by the API. The port is published on `127.0.0.1` only; do not publish it elsewhere without `WEBFORGE_ACCESS_CODE`.
+- **What persists.** `webforge-data` (spend ledger, saved key) and `webforge-runs` (events, checkpoints and deliverables of every run). Reset everything with `docker compose down -v`.
+- **Headless.** Docker has no display; the web UI shows live screenshots of each sub-agent's tab instead. To watch the real window, run on the host with `--headed`.
+- **Troubleshooting.** Port 8000 in use: change the left side of `127.0.0.1:8000:8000`. Chromium crashes: keep `shm_size: 1gb`. Anything else: `docker compose logs -f`.
 
 ## Quickstart (laptop, without Docker)
 
@@ -74,156 +63,89 @@ python -m playwright install --with-deps chromium   # asks for sudo once to inst
 python -m webforge serve --headed           # then open http://localhost:8000
 ```
 
-Inside the activated venv, `python` and `pip` work as written. Open http://localhost:8000, paste your Backboard key into the "Connect Backboard" card (or put it in `.env`: `cp .env.example .env`), pick an example task and press **Run agent**. `--headed` opens the real Chromium window so you can watch the agent; leave it out to run the browser invisibly. Next time you only need `source .venv/bin/activate` and the `serve` command.
-
-CLI examples:
+CLI:
 
 ```bash
-python -m webforge run "List the titles and prices of the 3 cheapest books in the 'Poetry' category on https://books.toscrape.com" --headed
-python -m webforge skills list                 # learned skills (also: skills show <name>, skills rm <name>)
-python -m webforge memory list                 # stored lessons (also: memory reset)
-python -m webforge bench run --mode cold --repeat 3      # live benchmark, spends money
-python -m webforge bench run --mode learned --repeat 3
-python -m webforge bench report runs/bench_cold_<ts>.jsonl runs/bench_learned_<ts>.jsonl
-python -m webforge serve-fixtures              # offline demo site at http://localhost:8765
-python -m webforge run "<task>" --mock         # offline smoke test with the mock LLM
+python -m webforge run "Compare 3 student laptops under \$1000 and save outputs/laptops.csv"
+python -m webforge run "Log in to https://example.com with user ada and the secret site_pw" --secret site_pw=env:SITE_PW
+python -m webforge run "<task>" --approval auto     # approve consequential actions automatically (payments stay blocked)
+python -m webforge resume <run_id>                  # continue an interrupted run from runs/<run_id>/checkpoint.json
+python -m webforge serve-fixtures                   # offline test site (forms, data pages) at http://localhost:8765
+python -m webforge run "<task>" --mock              # offline smoke test with the mock LLM
 ```
 
-`make help` lists shortcuts (`make install test serve demo-offline bench report docker-build`).
+In the terminal, questions and approvals pause the live view and wait for your answer (`approve` / `deny` or free text).
+
+## Safety model
+
+| Verdict | Actions | What happens |
+|---|---|---|
+| **allow** | navigate, read, search, scroll, type into ordinary fields, select options, tick boxes | runs |
+| **ask** | submit / send / post / sign up / log in / confirm / delete / book / apply, Enter in a form field, typing a password or secret | pauses and asks you; only `approve` proceeds. Denied or no answer: the agent is told and must not retry |
+| **block** | card number, CVV, IBAN, SSN fields; pay / buy now / place order / checkout clicks | never runs, whatever the mode |
+
+`WEBFORGE_APPROVAL=ask` (default) \| `auto` \| `deny` changes only the *ask* row. Page text is treated as untrusted data in every prompt. Secrets are resolved inside the browser at typing time and redacted from traces, events, observations and the UI.
 
 ## Configuration
 
-Set via environment variables or `.env` (see [.env.example](.env.example)).
-
 | Variable | Default | Meaning |
 |---|---|---|
-| `BACKBOARD_API_KEY` | none | Backboard API key. Required for live runs. |
-| `WEBFORGE_PROVIDER` | `anthropic` | LLM provider routed by Backboard. |
-| `WEBFORGE_MODEL` | `claude-haiku-5-5` | Model name. |
-| `WEBFORGE_BUDGET_USD` | `3.0` | Hard cap on cumulative spend, tracked in a global ledger (`data/spend.json`). LLM calls are refused once reached. |
-| `WEBFORGE_ALLOWED_DOMAINS` | `*` (any public website) | Optional comma-separated navigation allowlist (subdomains included), e.g. `books.toscrape.com,en.wikipedia.org`. |
-| `WEBFORGE_CHROMIUM` | auto | Path to a Chromium binary; empty uses Playwright's own. |
-| `WEBFORGE_DATA` / `WEBFORGE_RUNS` | `./data` / `./runs` | Skills, memory, state; run artefacts and benchmark JSONL. |
-| `WEBFORGE_LEDGER` | `./data/spend.json` | Spend ledger path. |
-| `WEBFORGE_WORKER_STEPS` / `WEBFORGE_PLANNER_STEPS` | `25` / `30` | Max browser actions per subtask / planner tool rounds per run. |
-| `WEBFORGE_PARALLEL` | `4` | Max concurrent sub-agents, tabs or search queries per tool call. |
-| `WEBFORGE_OBS_TEXT` | `4000` | Page-text characters per worker observation (`read(offset)` pages through the rest). |
-| `BACKBOARD_BASE_URL` | `https://app.backboard.io/api` | Backboard endpoint. |
-| `WEBFORGE_HEADED` | `0` | `1` shows the real browser window. `serve --headed` and `run --headed` set it for you. |
-| `WEBFORGE_ACCESS_CODE` | unset | Server: if set, starting runs and destructive endpoints need header `X-Access-Code`. |
-| `WEBFORGE_CORS_ORIGINS` | `*` without a code, none with one | Server: allowed browser origins. |
-| `WEBFORGE_MOCK` | unset | Server: `1` uses the offline mock LLM (no key, no spend). |
-
-## Safety and cost controls
-
-- **Optional domain allowlist.** Browsing is open-web by default. Set `WEBFORGE_ALLOWED_DOMAINS` and navigation (`goto`, including inside skill replay) to other hosts is refused.
-- **Blocked actions.** The worker cannot type into password/card/CVV/SSN-like fields, and cannot click checkout, pay, place-order, sign-in/log-in or delete-account controls (regex heuristics on element names).
-- **Untrusted page text.** Prompts tell the model to treat page text and tool output as data and not to follow instructions in it. This is a mitigation, not a guarantee.
-- **Spend cap.** Every Backboard call checks the global ledger first and raises `BudgetExceeded` at the cap; the server also returns HTTP 402. Benchmarks use isolated data directories but share the same ledger.
-- **Server.** Optional access code, closed CORS when a code is set, single concurrent run, 500-character task limit.
-
-## Results
-
-All numbers are from live runs with Claude Haiku 5.5 through Backboard on public practice sites. Sample sizes are small; treat them as indicative, not statistically significant. Methodology and threats to validity: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#10-benchmark-methodology-bench).
-
-### Single pair (n = 1 each)
-
-| | Steps | LLM calls | Tokens | Cost | Time |
-|---|---|---|---|---|---|
-| Poetry books task, cold | 3 | 8 | 2,924 | $0.0030 | 25.5 s |
-| Travel books task, with the learned skill | 2 | 4 | 1,310 | $0.0006 | 12.1 s |
-
-The Travel answer was verified against the live site.
-
-### Benchmark 1: 9 tasks, 1 run each
-
-Families: `books_category`, `quotes_by_tag`, `wiki_summary` (3 tasks each).
-
-| | Correct | Mean steps | Mean tokens | Mean seconds | Mean cost |
-|---|---|---|---|---|---|
-| Cold | 8/9 | 3.4 | 2,115 | 16.9 | $0.0019 |
-| Learned | 9/9 | 1.8 | 1,852 | 14.4 | $0.0015 |
-
-By family: Books cold 2/3 correct, 8 steps, 29 s vs learned 3/3, 3 steps, 19 s. Quotes and Wikipedia take about 1 step in both modes (nothing to learn). **The gain is concentrated in the Books family, n = 1 per task, and the single cold failure may be noise.**
-
-### Benchmark 2: 27 tasks per mode (9 tasks x 3 repeats)
-
-Source: `runs/bench_cold_20261124_044017.jsonl` and `runs/bench_learned_20261124_044017.jsonl`. Cells are cold vs learned.
-
-| Scope (n per mode) | Success | Mean steps | Mean tokens | Mean seconds | Mean cost |
-|---|---|---|---|---|---|
-| **Overall (27)** | 24/27 (89%) vs 27/27 (100%) | 2.85 vs 2.04 | 1,951 vs 1,583 | 15.5 vs 12.0 | $0.0017 vs $0.0011 |
-| books_category (9) | 6/9 (67%) vs 9/9 (100%) | 6.44 vs 3.78 | 2,875 vs 1,969 | 26.2 vs 15.7 | $0.0030 vs $0.0014 |
-| quotes_by_tag (9) | 9/9 vs 9/9 | 1.00 vs 1.11 | 1,908 vs 1,431 | 11.2 vs 9.9 | $0.0012 vs $0.0010 |
-| wiki_summary (9) | 9/9 vs 9/9 | 1.11 vs 1.22 | 1,070 vs 1,348 | 9.1 vs 10.4 | $0.0010 vs $0.0010 |
-
-Reading it honestly:
-
-- The improvement is again concentrated in Books: about 40% fewer steps, 32% fewer tokens, 40% less time, and about 54% lower cost than cold.
-- Quotes and Wikipedia show no clear gain. Learned mode took marginally more steps on both (1.11 vs 1.00; 1.22 vs 1.11) and, on Wikipedia, more tokens and time. Quotes used fewer tokens at about the same step count, which I would not attribute to skills at this sample size. There is nothing to reuse when the model already solves the task in about one step.
-- All three cold failures are the same task (`books_mystery`, once per repeat): the planner did not finish. It failed in all 3 repeats, so this looks systematic rather than noise; the learned runs finished it every time (with skills carried over from the Poetry and Travel tasks).
-- In learned mode, skills persist across repeats, so repeats 2 and 3 can reuse a skill built for the exact same task in repeat 1. Part of the learned advantage is therefore reuse, not only transfer to a new variant.
-- Checkers verify answer format (for example three prices), not ground-truth correctness. Differences of one or two tasks are not significant.
-
-### Long-horizon run (n = 1)
-
-Task: Hacker News top 3 stories, open each comments page, write per-story notes, produce `report.md`. Completed in 47.5 s, 7 steps, 14 LLM calls, $0.0056, reusing 2 previously built skills. The numbers in the report were verified against live Hacker News (two stories exact, one within live drift).
-
-**What went wrong:** the first attempt ended "incomplete" (69.9 s, 21 LLM calls). A bug in the planner counted every prose reply toward its nudge limit instead of only consecutive ones. It was fixed (commit `a4ab12a`), and the second attempt above completed.
-
-### Spend
-
-The whole project so far has spent about $0.13 of the $3.00 cap (read from `data/spend.json`, the global ledger).
+| `BACKBOARD_API_KEY` | (none) | Backboard key; can also be pasted in the web UI |
+| `WEBFORGE_PROVIDER` / `WEBFORGE_MODEL` | `anthropic` / `claude-haiku-5-5` | model routing through Backboard |
+| `WEBFORGE_BUDGET_USD` | `3.0` | hard cap on cumulative spend (ledger in `data/spend.json`) |
+| `WEBFORGE_RUN_BUDGET_USD` / `WEBFORGE_RUN_DEADLINE_S` | `0.25` / `600` | per-run budget: wrap-up at 70 %, research refused at 100 % |
+| `WEBFORGE_APPROVAL` | `ask` | `ask` \| `auto` \| `deny` for consequential actions |
+| `WEBFORGE_ASK_TIMEOUT` | `90` | seconds to wait for your answer |
+| `WEBFORGE_VERIFY_ROUNDS` | `2` | how often the verifier may send the planner back |
+| `WEBFORGE_PARALLEL` | `4` | concurrent sub-agents, tabs and searches |
+| `WEBFORGE_SECRET_<NAME>` | (none) | secret values for `{{secret:name}}` |
+| `WEBFORGE_SCREENSHOTS` | `1` | live tab thumbnails in the web UI |
+| `WEBFORGE_ALLOWED_DOMAINS` | `*` (open web) | optional comma-separated navigation allowlist |
+| `WEBFORGE_WORKER_STEPS` / `WEBFORGE_PLANNER_STEPS` | `25` / `30` | safety caps per subtask / per run |
+| `WEBFORGE_OBS_TEXT` | `4000` | page-text characters per observation (`read(offset)` pages through the rest) |
+| `WEBFORGE_ACCESS_CODE`, `WEBFORGE_CORS_ORIGINS` | (none) | server hardening for remote use |
 
 ## Project layout
 
 ```
 webforge/
-  __main__.py        CLI: run, skills, memory, bench, serve, serve-fixtures
-  config.py          environment-driven Config
-  contracts.py       shared dataclasses and protocols (Observation, Skill, LLM, RunResult, events)
-  llm.py             BackboardLLM, MockLLM/ScriptedMock, retry, spend ledger
-  memory.py          BackboardMemory (+ JSONL mirror) and LocalMemory
-  safety.py          domain allowlist, blocked actions
-  server.py          FastAPI: runs + SSE stream, skills/memory/bench endpoints, serves web/
-  ui.py              Rich live terminal UI
-  agent/             planner (orchestrator), worker (browsing sub-agent), reflector, prompts
-  browser/           Playwright wrapper, observation JS + robust locators, actions
-  skills/            library (JSON files), builder (LLM), replay (no LLM)
-bench/               tasks.yaml, run_bench.py (cold vs learned, checkers, report)
-fixtures/            offline demo site + generator (served by serve-fixtures)
-web/                 static front-end (Run, Learning, Skills & Memory, Architecture tabs)
-scripts/             export_site_data.py (bench/skills/memory snapshots for the static site)
-tests/               offline test suite
-docs/                ARCHITECTURE.md, DEMO.md
-Dockerfile, render.yaml, vercel.json   deployment
+  agent/planner.py     orchestrator: tools, parallelism, offloading, budgets, checkpoint/resume
+  agent/worker.py      browsing sub-agent: observe -> act loop through the safety gate
+  agent/verifier.py    verifier sub-agent
+  agent/prompts.py     system prompts and tool schemas (planner, worker, analyst, verifier)
+  browser/session.py   Browser (process) + Tab (page, trace): actions, fill_form, secrets, readers, screenshots
+  browser/observe.py   page -> numbered elements with labels/form details + validation errors
+  browser/actions.py   URL normalisation, extraction and selector-free readers
+  safety.py            allow / ask / block policy, secrets
+  llm.py               Backboard client (tool loop, web search, spend ledger), MockLLM for tests
+  server.py            FastAPI: runs, live events (SSE), answers/approvals, secrets, files, cancel, resume
+  ui.py, __main__.py   terminal UI and CLI
+web/                   static front-end (served by the backend; also deployable to Vercel)
+fixtures/site/         offline test pages: forms, data tables, mini wiki
+tests/                 offline test suite (MockLLM + fixture site)
 ```
 
 ## Deployment
 
-- **Static site on Vercel.** Import the repo; `vercel.json` sets `outputDirectory` to `web`, so the front-end (UI, recorded-run replay, results, architecture) is served as static files with no build step.
-- **Backend on Docker / Render.** `Dockerfile` builds an image with Chromium (Playwright base image) and runs `uvicorn webforge.server:app`; `render.yaml` is a Render blueprint (Starter plan or larger, health check `/api/health`). Set `BACKBOARD_API_KEY`, `WEBFORGE_ACCESS_CODE` and `WEBFORGE_CORS_ORIGINS` (your Vercel URL) as secrets in the dashboard. Without a persistent disk, skills, memory and the spend ledger reset on every deploy.
-- In the deployed UI, enter the backend URL and access code in the Connection card.
-- **The agent needs Chromium and a Backboard key, so live runs happen on a laptop or a Docker host, not on Vercel.** On Vercel alone the UI is read-only: results, skills, architecture and recorded-run replay.
+- **Backend (where the agent runs):** your laptop or any Docker host (`docker compose up`), or Render via `render.yaml`. Set `BACKBOARD_API_KEY`, `WEBFORGE_ACCESS_CODE` and `WEBFORGE_CORS_ORIGINS` there.
+- **Front-end only on Vercel:** `vercel.json` serves `web/` statically; enter the backend URL and access code under Connection. The agent itself needs Chromium, so it never runs on Vercel.
 
 ## Limitations
 
-- Needs a Backboard key and Chromium; live results depend on third-party sites and model variance.
-- Evidence is small: 9 distinct tasks on three sites, at most 3 repeats. Checkers test answer format, not ground truth.
-- Gains appear only where a task kind repeats and takes several exploratory steps; one-step tasks gain nothing.
-- Skills are tied to site structure and are validated only against the live site at build time; a redesign triggers repair (which can fail) or demotion. Demotion is not reversible automatically.
-- The allowlist is enforced on navigation actions, not on every network request; risky-click and sensitive-field checks are heuristics; there is no login, payment, CAPTCHA or file-transfer support.
-- Small models sometimes reply in prose instead of calling a tool; a nudge mechanism handles most cases but not all.
-- One run at a time per server; the spend ledger is not safe against concurrent writers.
+- Sites with captchas, bot walls or required logins you have not provided a secret for will stop a sub-agent; the agent reports it and tries other sources.
+- No payments, file uploads or downloads by design.
+- Answers from web search are only as good as the sources; the verifier checks completeness and unsupported claims, not truth.
+- Haiku sometimes replies in prose instead of calling a tool; the planner nudges it (visible as a dim line in the timeline).
+- One run at a time per server.
 
 ## Testing
 
 ```bash
-python -m pytest -q      # 50 passed, 1 skipped (the skip is the live Backboard round-trip: set `WEBFORGE_LIVE=1` and a key to run it)
+python -m pytest -q          # offline: browser, forms, secrets, safety, planner features, server endpoints
 ```
 
-Tests run fully offline: `MockLLM`/`ScriptedMock` stand in for the model and a local copy of the fixture site stands in for the web. No key, no spend.
+Live tests that need a key and network are marked `live` and skipped without `BACKBOARD_API_KEY`.
 
 ## License and credits
 
-MIT, see [LICENSE](LICENSE). Copyright (c) 2026 Auro-rium. LLM and memory via [Backboard](https://backboard.io); browser automation via [Playwright](https://playwright.dev); practice sites by Scrapinghub ([books.toscrape.com](https://books.toscrape.com), [quotes.toscrape.com](https://quotes.toscrape.com)), plus Wikipedia and Hacker News.
+MIT, see [LICENSE](LICENSE). Copyright (c) 2026 Auro-rium. LLM and web search via [Backboard](https://backboard.io); browser automation via [Playwright](https://playwright.dev).

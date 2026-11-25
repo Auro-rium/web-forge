@@ -6,8 +6,6 @@ from fastapi.testclient import TestClient
 
 from webforge import server
 from webforge.config import Config
-from webforge.contracts import Skill, SkillStep
-from webforge.skills.library import SkillLibrary
 
 
 @pytest.fixture
@@ -27,6 +25,7 @@ def cfg(tmp_path, monkeypatch):
     server._KEY_ATTEMPTS.clear()
     server.STATE.runs.clear()
     server.STATE.active = None
+    server.STATE.secrets = None
     return c
 
 
@@ -47,14 +46,13 @@ def _stub(release: asyncio.Event | None = None):
     return fake
 
 
-def test_health_and_tasks(client, cfg):
+def test_health_and_spend(client, cfg):
     h = client.get("/api/health").json()
     assert h["ok"] is True and h["budget_usd"] == 1.0 and "browser" in h and h["mock"] is False
     assert "api_key" not in json.dumps(h).lower()
-    t = client.get("/api/tasks").json()["tasks"]
-    assert any(x["id"] == "books_poetry" for x in t) and all(x["prompt"] for x in t)
-    assert t[0]["family"] == "everyday"
     assert client.get("/api/spend").json()["budget_usd"] == 1.0
+    for gone in ("/api/tasks", "/api/skills", "/api/memory", "/api/bench"):
+        assert client.get(gone).status_code in (404, 405)
 
 
 def test_run_validation(client, monkeypatch):
@@ -78,8 +76,11 @@ def test_access_code_required(client, monkeypatch):
     assert client.post("/api/run", json={"task": "hi"}, headers={"X-Access-Code": "nope"}).status_code == 401
     r = client.post("/api/run", json={"task": "hi"}, headers={"X-Access-Code": "sesame"})
     assert r.status_code == 202 and r.json()["run_id"]
-    assert client.delete("/api/skills/x").status_code == 401
-    assert client.post("/api/memory/reset").status_code == 401
+    rid = r.json()["run_id"]
+    assert client.post(f"/api/runs/{rid}/answer", json={"ask_id": "q", "answer": "approve"}).status_code == 401
+    assert client.post(f"/api/runs/{rid}/cancel").status_code == 401
+    assert client.post(f"/api/runs/{rid}/resume").status_code == 401
+    assert client.post("/api/secrets", json={"name": "a", "value": "b"}).status_code == 403
 
 
 def test_run_events_sse_and_info(client, monkeypatch):
@@ -123,43 +124,86 @@ def test_run_persists_result(client, cfg, monkeypatch):
     assert (cfg.runs_dir / rid / "events.json").exists()
 
 
-def test_skills_endpoints(client, cfg):
-    lib = SkillLibrary(cfg.skills_dir)
-    lib.save(Skill(name="list_books", domain="books.toscrape.com", description="d", params=["category"],
-                   steps=[SkillStep("goto", None, "https://books.toscrape.com/"),
-                          SkillStep("click", {"role": "link", "name": "{category}"})], uses=2, successes=2))
-    lst = client.get("/api/skills").json()["skills"]
-    assert lst[0]["name"] == "list_books" and lst[0]["n_steps"] == 2 and lst[0]["uses"] == 2
-    full = client.get("/api/skills/list_books").json()
-    assert len(full["steps"]) == 2
-    assert client.get("/api/skills/..%2Fetc").status_code == 404
-    assert client.get("/api/skills/missing").status_code == 404
-    assert client.delete("/api/skills/list_books").json() == {"deleted": "list_books"}
-    assert client.get("/api/skills").json()["skills"] == []
+def _wait(pred, n=100):
+    import time
+    for _ in range(n):
+        if pred():
+            return True
+        time.sleep(0.03)
+    return False
 
 
-def test_memory_endpoints(client, cfg, monkeypatch):
-    monkeypatch.setenv("WEBFORGE_MOCK", "1")
-    cfg.memory_mirror.write_text("\n".join(json.dumps({"content": f"lesson {i}", "metadata": {"kind": "lesson"}})
-                                           for i in range(3)) + "\n")
-    m = client.get("/api/memory").json()
-    assert m["total"] == 3 and m["memories"][0]["content"] == "lesson 2"
-    assert client.post("/api/memory/reset").json() == {"reset": True}
-    assert client.get("/api/memory").json()["total"] == 0
+def test_ask_answer_roundtrip(client, monkeypatch):
+    async def fake(run, cfg):
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        run.pending["q1"] = fut
+        await server._push(run, "ask_id", {"ask_id": "q1", "question": "Approve?", "options": ["approve", "deny"]})
+        ans = await fut
+        run.result = {"answer": "user said " + ans, "ok": True}
+        await server._finish(run, "done")
+    monkeypatch.setattr(server, "_execute", fake)
+    rid = client.post("/api/run", json={"task": "needs approval"}).json()["run_id"]
+    assert _wait(lambda: "q1" in client.get(f"/api/runs/{rid}").json()["pending"])
+    assert client.post(f"/api/runs/{rid}/answer", json={"ask_id": "nope", "answer": "x"}).status_code == 404
+    assert client.post(f"/api/runs/{rid}/answer", json={"ask_id": "q1", "answer": "approve"}).json() == {"ok": True}
+    assert _wait(lambda: client.get(f"/api/runs/{rid}").json()["status"] == "done")
+    assert client.get(f"/api/runs/{rid}").json()["result"]["answer"] == "user said approve"
 
 
-def test_bench_endpoint(client, cfg):
-    assert client.get("/api/bench").json()["cold"] == []
-    row = {"id": "t1", "family": "f", "mode": "cold", "correct": True, "steps": 6, "tokens": 100, "seconds": 10.0,
-           "cost_usd": 0.01}
-    (cfg.runs_dir / "bench_cold_20250101_000000.jsonl").write_text(json.dumps(row) + "\n")
-    (cfg.runs_dir / "bench_cold_20250102_000000.jsonl").write_text(json.dumps({**row, "steps": 8}) + "\n")
-    (cfg.runs_dir / "bench_learned_20250102_000000.jsonl").write_text(
-        json.dumps({**row, "mode": "learned", "steps": 4}) + "\n")
-    b = client.get("/api/bench").json()
-    assert b["cold_file"] == "bench_cold_20250102_000000.jsonl" and b["cold"][0]["steps"] == 8
-    assert b["learned"][0]["steps"] == 4
-    assert b["aggregate"]["overall"]["reduction"]["steps"] == pytest.approx(50.0)
+def test_cancel_run(client, monkeypatch):
+    monkeypatch.setattr(server, "_execute", _stub(asyncio.Event()))   # never released
+    rid = client.post("/api/run", json={"task": "long"}).json()["run_id"]
+    assert client.post(f"/api/runs/{rid}/cancel").json() == {"ok": True}
+    assert _wait(lambda: client.get(f"/api/runs/{rid}").json()["status"] == "cancelled")
+    assert client.post(f"/api/runs/{rid}/cancel").status_code == 409
+
+
+def test_secrets_names_only_and_redacted_from_events(client, monkeypatch):
+    r = client.post("/api/secrets", json={"name": "site_pw", "value": "hunter2-secret"})
+    assert r.json() == {"names": ["site_pw"]}
+    assert client.get("/api/secrets").json() == {"names": ["site_pw"]}
+    assert client.post("/api/secrets", json={"name": "bad name!", "value": "x"}).status_code == 422
+
+    async def leaky(run, cfg):
+        await server._push(run, "action", {"message": "typed hunter2-secret"})
+        await server._finish(run, "done")
+    monkeypatch.setattr(server, "_execute", leaky)
+    rid = client.post("/api/run", json={"task": "t"}).json()["run_id"]
+    with client.stream("GET", f"/api/runs/{rid}/events") as resp:
+        body = "".join(resp.iter_text())
+    assert "hunter2" not in body and "{{secret:site_pw}}" in body
+
+
+def test_files_endpoint_serves_outputs_only(client, cfg):
+    out = cfg.runs_dir / "web_x" / "outputs"
+    out.mkdir(parents=True)
+    (out / "report.md").write_text("# hi")
+    (cfg.runs_dir / "web_x" / "checkpoint.json").write_text("{}")
+    assert client.get("/api/runs/web_x/files").json() == {"files": [{"name": "report.md", "size": 4}]}
+    assert client.get("/api/runs/web_x/files/report.md").text == "# hi"
+    assert client.get("/api/runs/web_x/files/..%2Fcheckpoint.json").status_code == 404
+    assert client.get("/api/runs/web_x/files/../checkpoint.json").status_code == 404
+    assert client.get("/api/runs/bad..id/files").status_code == 404
+
+
+def test_resume_endpoint(client, cfg, monkeypatch):
+    seen = {}
+
+    async def fake(run, cfg_):
+        seen["resume"] = run.resume
+        await server._finish(run, "done")
+    monkeypatch.setattr(server, "_execute", fake)
+    d = cfg.runs_dir / "web_old"
+    d.mkdir()
+    assert client.post("/api/runs/web_old/resume").status_code == 404
+    (d / "checkpoint.json").write_text(json.dumps({"task": "finish me", "status": "error", "workspace": {"a": "b"}}))
+    r = client.post("/api/runs/web_old/resume")
+    assert r.status_code == 202 and r.json()["run_id"] == "web_old"
+    assert _wait(lambda: seen.get("resume", {}).get("workspace") == {"a": "b"})
+    (d / "checkpoint.json").write_text(json.dumps({"task": "x", "status": "done"}))
+    assert _wait(lambda: server.STATE.active is None)
+    assert client.post("/api/runs/web_old/resume").status_code == 409
 
 
 def test_cors_defaults(monkeypatch):

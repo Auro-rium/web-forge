@@ -1,12 +1,13 @@
-"""WebForge API server (FastAPI): run the agent from a browser, stream events live, browse skills/memory/bench.
+"""WebForge API server (FastAPI): run the agent from a browser, stream events live, answer its questions and
+approvals, manage secrets, download deliverables, cancel and resume runs.
 
 Run:  python -m webforge serve [--port 8000]      or      uvicorn webforge.server:app
 
 Env:
-  WEBFORGE_ACCESS_CODE   if set, POST /api/run, DELETE /api/skills/*, POST /api/memory/reset need header X-Access-Code
+  WEBFORGE_ACCESS_CODE   if set, starting/controlling runs and setting secrets need header X-Access-Code
   WEBFORGE_CORS_ORIGINS  comma list of allowed browser origins ("*" allowed). Default "*" only when no access code
                          is set; with an access code and no list, cross-origin browsers are refused.
-  WEBFORGE_MOCK=1        use the offline MockLLM + local memory (no Backboard key / spend)
+  WEBFORGE_MOCK=1        use the offline MockLLM (no Backboard key / spend)
   WEBFORGE_LOCAL=1       trust the client (set by docker-compose, which publishes the port on 127.0.0.1 only):
                          lets the browser save the Backboard key without an access code
 Backboard key resolution: env BACKBOARD_API_KEY > key saved from the web UI (<data_dir>/backboard_key) > none.
@@ -76,16 +77,6 @@ def _check_code(provided: Optional[str]) -> bool:
 def _require_code(provided: Optional[str]) -> None:
     if not _check_code(provided):
         raise HTTPException(401, "Access code required (header X-Access-Code).")
-
-
-def _require_admin(request: Request, provided: Optional[str]) -> None:
-    """Destructive endpoints: access code if configured, otherwise loopback clients only."""
-    if _access_code():
-        _require_code(provided)
-        return
-    host = request.client.host if request.client else ""
-    if host not in ("127.0.0.1", "::1", "localhost", "testclient"):
-        raise HTTPException(403, "Set WEBFORGE_ACCESS_CODE to allow this action from a remote client.")
 
 
 # ------------------------------------------------------------ backboard key ---
@@ -202,33 +193,50 @@ def _valid_key_shape(k: str) -> bool:
 
 class RunRequest(BaseModel):
     task: str
-    learn: bool = True
-    use_skills: bool = True
-    use_memory: bool = True
+
+
+class AnswerRequest(BaseModel):
+    ask_id: str
+    answer: str
+
+
+class SecretRequest(BaseModel):
+    name: str
+    value: str
 
 
 class Run:
-    def __init__(self, run_id: str, req: RunRequest):
+    def __init__(self, run_id: str, req: RunRequest, resume: Optional[dict] = None, parent: Optional[str] = None):
         self.id = run_id
         self.req = req
-        self.status = "running"          # running | done | error
+        self.resume = resume
+        self.parent = parent
+        self.status = "running"          # running | done | error | cancelled
         self.events: list[dict] = []
         self.result: Optional[dict] = None
         self.error: Optional[str] = None
         self.started = time.time()
         self.cond = asyncio.Condition()
         self.task: Optional[asyncio.Task] = None
+        self.pending: dict[str, asyncio.Future] = {}   # ask_id -> future resolved by POST /answer
 
     def public(self) -> dict:
-        return {"run_id": self.id, "status": self.status, "task": self.req.task, "learn": self.req.learn,
-                "use_skills": self.req.use_skills, "use_memory": self.req.use_memory,
-                "n_events": len(self.events), "result": self.result, "error": self.error}
+        return {"run_id": self.id, "status": self.status, "task": self.req.task, "resumed_from": self.parent,
+                "n_events": len(self.events), "pending": list(self.pending), "result": self.result,
+                "error": self.error}
 
 
 class State:
     def __init__(self) -> None:
         self.runs: "OrderedDict[str, Run]" = OrderedDict()
         self.active: Optional[str] = None
+        self.secrets = None   # webforge.safety.Secrets, created lazily (env WEBFORGE_SECRET_* + UI-set values)
+
+    def get_secrets(self):
+        if self.secrets is None:
+            from webforge.safety import Secrets
+            self.secrets = Secrets()
+        return self.secrets
 
 
 STATE = State()
@@ -239,9 +247,14 @@ def _jsonable(x: Any) -> Any:
 
 
 async def _push(run: Run, kind: str, data: dict) -> None:
-    ev = {"t": round(time.time() - run.started, 2), "kind": kind, "data": _jsonable(data or {})}
+    data = _jsonable(data or {})
+    sec = STATE.get_secrets()
+    data = json.loads(sec.redact(json.dumps(data, ensure_ascii=False)))
+    ev = {"t": round(time.time() - run.started, 2), "kind": kind, "data": data}
+    if kind == "screenshot":   # live-only: replace the previous frame of the same agent instead of piling up
+        run.events = [e for e in run.events
+                      if not (e["kind"] == "screenshot" and e["data"].get("agent") == data.get("agent"))]
     if len(run.events) >= MAX_EVENTS:
-        # keep the first/last events useful: drop the oldest non-terminal one
         run.events.pop(1 if len(run.events) > 1 else 0)
     run.events.append(ev)
     async with run.cond:
@@ -261,9 +274,10 @@ def _persist(cfg: Config, run: Run) -> None:
         if run.result is not None:
             (d / "result.json").write_text(json.dumps(run.result, indent=2, ensure_ascii=False, default=str),
                                            encoding="utf-8")
+        events = [e for e in run.events if e["kind"] != "screenshot"]
         (d / "events.json").write_text(json.dumps(
-            {"run_id": run.id, "task": run.req.task, "recorded": True, "events": run.events,
-             "result": run.result, "error": run.error}, ensure_ascii=False, default=str), encoding="utf-8")
+            {"run_id": run.id, "task": run.req.task, "events": events, "result": run.result, "error": run.error},
+            ensure_ascii=False, default=str), encoding="utf-8")
     except Exception:
         pass
 
@@ -273,28 +287,34 @@ async def _execute(run: Run, cfg: Config) -> None:
     from webforge.agent.planner import run_task
     from webforge.browser.session import Browser
     from webforge.llm import make_llm
-    from webforge.memory import make_memory
-    from webforge.skills.library import SkillLibrary
 
-    mock = _mock()
-    llm = memory = browser = None
+    llm = browser = None
     loop = asyncio.get_running_loop()
 
     def on_event(kind: str, data: dict) -> None:
         # planner/worker call this synchronously from the event loop thread
         loop.create_task(_push(run, kind, data))
 
+    async def on_ask(question: str, options: list) -> str:
+        ask_id = secrets.token_hex(4)
+        fut: asyncio.Future = loop.create_future()
+        run.pending[ask_id] = fut
+        await _push(run, "ask_id", {"ask_id": ask_id, "question": question, "options": options,
+                                    "timeout_s": cfg.ask_timeout_s})
+        try:
+            return await fut
+        finally:
+            run.pending.pop(ask_id, None)
+
     try:
-        llm = make_llm(cfg, mock=mock)
-        memory = make_memory(cfg, local_only=mock)
-        library = SkillLibrary(cfg.skills_dir)
-        browser = Browser(chromium_path=cfg.chromium_path, allowed_domains=cfg.allowed_domains)
+        llm = make_llm(cfg, mock=_mock())
+        browser = Browser(chromium_path=cfg.chromium_path, allowed_domains=cfg.allowed_domains,
+                          secrets=STATE.get_secrets())
         await browser.start(headless=os.getenv("WEBFORGE_HEADED") != "1")
-        run_dir = Path(cfg.runs_dir) / run.id
-        res = await run_task(run.req.task, llm=llm, browser=browser, library=library, memory=memory, cfg=cfg,
-                             on_event=on_event, learn=run.req.learn, use_memory=run.req.use_memory,
-                             use_skills=run.req.use_skills, run_dir=run_dir)
+        res = await run_task(run.req.task, llm=llm, browser=browser, cfg=cfg, on_event=on_event, on_ask=on_ask,
+                             run_dir=Path(cfg.runs_dir) / run.id, resume=run.resume)
         run.result = _jsonable(dataclasses.asdict(res))
+        run.result.pop("notes", None)   # workspace stays on disk; the UI gets file names via /files
     except asyncio.CancelledError:
         run.error = "cancelled"
         raise
@@ -302,8 +322,7 @@ async def _execute(run: Run, cfg: Config) -> None:
         run.error = _scrub(f"{type(e).__name__}: {str(e)[:300]}", cfg.api_key)
         await _push(run, "error", {"message": run.error})
     finally:
-        for closer in (getattr(browser, "close", None), getattr(llm, "aclose", None),
-                       getattr(memory, "aclose", None)):
+        for closer in (getattr(browser, "close", None), getattr(llm, "aclose", None)):
             if closer:
                 try:
                     await closer()
@@ -312,15 +331,21 @@ async def _execute(run: Run, cfg: Config) -> None:
 
 
 async def _run_wrapper(run: Run, cfg: Config) -> None:
+    status = None
     try:
         await _execute(run, cfg)  # browser/LLM are closed before we announce "done"
         await asyncio.sleep(0)    # let queued on_event pushes land first
+    except asyncio.CancelledError:
+        status = "cancelled"
     except BaseException as e:  # noqa: BLE001
         run.error = run.error or _scrub(f"{type(e).__name__}: {str(e)[:300]}", cfg.api_key)
     finally:
+        for fut in run.pending.values():
+            if not fut.done():
+                fut.cancel()
         _persist(cfg, run)
         if run.status == "running":
-            await _finish(run, "error" if run.error else "done")
+            await _finish(run, status or ("error" if run.error else "done"))
         if STATE.active == run.id:
             STATE.active = None
 
@@ -416,39 +441,18 @@ async def spend() -> dict:
     return {"spend_usd": s, "budget_usd": cfg.budget_usd, "remaining_usd": round(max(cfg.budget_usd - s, 0), 6)}
 
 
-# everyday tasks verified live (see docs/DEMO.md); shown before the benchmark tasks
-EVERYDAY_TASKS = [
-    {"id": "weather_london", "family": "everyday", "prompt": "What's the weather in London today?"},
-    {"id": "weather_paris", "family": "everyday", "prompt": "What is the weather in Paris right now?"},
-    {"id": "hn_top3", "family": "everyday", "prompt": "What are the top 3 stories on Hacker News right now?"},
-    {"id": "uk_pm", "family": "everyday", "prompt": "Who is the current prime minister of the UK?"},
-    {"id": "student_laptops", "family": "everyday",
-     "prompt": "Recommend 3 good laptops for students under 1000 dollars"},
-]
-
-
-@app.get("/api/tasks")
-async def tasks() -> dict:
-    try:
-        import yaml
-        data = yaml.safe_load((ROOT / "bench" / "tasks.yaml").read_text(encoding="utf-8"))
-        items = data["tasks"] if isinstance(data, dict) else data
-        bench = [{"id": t["id"], "family": t.get("family", ""), "prompt": t["prompt"]} for t in items]
-    except Exception:
-        bench = []
-    return {"tasks": EVERYDAY_TASKS + bench}
-
-
-@app.post("/api/run")
-async def start_run(req: RunRequest, x_access_code: Optional[str] = Header(default=None)) -> JSONResponse:
-    _require_code(x_access_code)
-    task = (req.task or "").strip()
+def _validate_task(task: str) -> str:
+    task = (task or "").strip()
     if not task:
         raise HTTPException(422, "Task must not be empty.")
     if len(task) > MAX_TASK_CHARS:
         raise HTTPException(422, f"Task is too long (max {MAX_TASK_CHARS} characters).")
     if any(ord(c) < 32 and c not in "\n\t" for c in task):
         raise HTTPException(422, "Task contains control characters.")
+    return task
+
+
+def _start(req: RunRequest, resume: Optional[dict] = None, parent: Optional[str] = None) -> JSONResponse:
     cfg = get_cfg()
     if _needs_key(cfg):
         return JSONResponse({"error": "Backboard API key not set", "needs_key": True}, status_code=428)
@@ -457,15 +461,21 @@ async def start_run(req: RunRequest, x_access_code: Optional[str] = Header(defau
         raise HTTPException(402, f"Budget exhausted (${_spend(cfg):.2f} of ${cfg.budget_usd:.2f}).")
     if STATE.active is not None:  # single-threaded event loop: check+set is atomic (no await between)
         raise HTTPException(409, "Another run is in progress. Wait for it to finish.")
-    run_id = f"web_{time.strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(2)}"
-    req = req.model_copy(update={"task": task})
-    run = Run(run_id, req)
+    run_id = parent if resume else f"web_{time.strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(2)}"
+    run = Run(run_id, req, resume=resume, parent=parent)
     STATE.active = run_id
+    STATE.runs.pop(run_id, None)
     STATE.runs[run_id] = run
     while len(STATE.runs) > KEEP_RUNS:
         STATE.runs.popitem(last=False)
     run.task = asyncio.create_task(_run_wrapper(run, cfg))
     return JSONResponse({"run_id": run_id}, status_code=202)
+
+
+@app.post("/api/run")
+async def start_run(req: RunRequest, x_access_code: Optional[str] = Header(default=None)) -> JSONResponse:
+    _require_code(x_access_code)
+    return _start(req.model_copy(update={"task": _validate_task(req.task)}))
 
 
 def _get_run(run_id: str) -> Run:
@@ -515,98 +525,74 @@ async def run_info(run_id: str) -> dict:
     return _get_run(run_id).public()
 
 
-# ---------------------------------------------------------------- skills ---
-
-def _library():
-    from webforge.skills.library import SkillLibrary
-    return SkillLibrary(get_cfg().skills_dir)
-
-
-@app.get("/api/skills")
-async def skills_list() -> dict:
-    from webforge.skills.library import is_demoted
-    out = []
-    for s in _library().list(include_demoted=True):
-        out.append({"name": s.name, "domain": s.domain, "description": s.description, "params": s.params,
-                    "uses": s.uses, "successes": s.successes, "version": s.version, "n_steps": len(s.steps),
-                    "demoted": is_demoted(s)})
-    return {"skills": out}
+@app.post("/api/runs/{run_id}/answer")
+async def run_answer(run_id: str, body: AnswerRequest, x_access_code: Optional[str] = Header(default=None)) -> dict:
+    _require_code(x_access_code)
+    fut = _get_run(run_id).pending.get(body.ask_id)
+    if fut is None or fut.done():
+        raise HTTPException(404, "No open question with that id (it may have timed out).")
+    fut.set_result((body.answer or "")[:2000])
+    return {"ok": True}
 
 
-@app.get("/api/skills/{name}")
-async def skill_get(name: str) -> dict:
-    if not _NAME_RE.match(name):
-        raise HTTPException(404, "No such skill.")
-    s = _library().get(name)
-    if not s:
-        raise HTTPException(404, "No such skill.")
-    return s.to_dict()
+@app.post("/api/runs/{run_id}/cancel")
+async def run_cancel(run_id: str, x_access_code: Optional[str] = Header(default=None)) -> dict:
+    _require_code(x_access_code)
+    run = _get_run(run_id)
+    if run.status != "running" or run.task is None:
+        raise HTTPException(409, "Run is not running.")
+    run.task.cancel()
+    return {"ok": True}
 
 
-@app.delete("/api/skills/{name}")
-async def skill_delete(name: str, request: Request, x_access_code: Optional[str] = Header(default=None)) -> dict:
-    _require_admin(request, x_access_code)
-    if not _NAME_RE.match(name) or not _library().delete(name):
-        raise HTTPException(404, "No such skill.")
-    return {"deleted": name}
+def _run_dir(run_id: str) -> Path:
+    if not _RUN_ID_RE.match(run_id):
+        raise HTTPException(404, "Unknown run.")
+    return Path(get_cfg().runs_dir) / run_id
 
 
-# ---------------------------------------------------------------- memory ---
-
-@app.get("/api/memory")
-async def memory_list() -> dict:
-    from webforge.memory import LocalMemory
-    items = await LocalMemory(get_cfg()).list()   # local mirror holds everything the agent wrote
-    items = [{"content": i["content"], "metadata": i.get("metadata", {})} for i in reversed(items)]
-    return {"total": len(items), "memories": items[:200]}
-
-
-@app.post("/api/memory/reset")
-async def memory_reset(request: Request, x_access_code: Optional[str] = Header(default=None)) -> dict:
-    _require_admin(request, x_access_code)
-    from webforge.memory import make_memory
-    mem = make_memory(_cfg_with_key(get_cfg()), local_only=_mock())
-    try:
-        await mem.reset()
-    finally:
-        if hasattr(mem, "aclose"):
-            try:
-                await mem.aclose()
-            except Exception:
-                pass
-    return {"reset": True}
+@app.post("/api/runs/{run_id}/resume")
+async def run_resume(run_id: str, x_access_code: Optional[str] = Header(default=None)) -> JSONResponse:
+    _require_code(x_access_code)
+    from webforge.agent.planner import load_checkpoint
+    cp = load_checkpoint(_run_dir(run_id))
+    if not cp:
+        raise HTTPException(404, "This run has no checkpoint to resume from.")
+    if cp.get("status") == "done":
+        raise HTTPException(409, "This run already finished.")
+    return _start(RunRequest(task=cp["task"]), resume=cp, parent=run_id)
 
 
-# ----------------------------------------------------------------- bench ---
+@app.get("/api/runs/{run_id}/files")
+async def run_files(run_id: str) -> dict:
+    out = _run_dir(run_id) / "outputs"
+    files = sorted(str(p.relative_to(out)) for p in out.rglob("*") if p.is_file()) if out.is_dir() else []
+    return {"files": [{"name": f, "size": (out / f).stat().st_size} for f in files]}
 
-def _latest(runs_dir: Path, mode: str) -> Optional[Path]:
-    files = sorted(p for p in Path(runs_dir).glob(f"bench_{mode}_*.jsonl") if p.is_file())
-    return files[-1] if files else None
+
+@app.get("/api/runs/{run_id}/files/{path:path}")
+async def run_file(run_id: str, path: str):
+    from fastapi.responses import FileResponse
+    out = (_run_dir(run_id) / "outputs").resolve()
+    f = (out / path).resolve()
+    if out not in f.parents or not f.is_file():
+        raise HTTPException(404, "No such file.")
+    return FileResponse(f, filename=f.name)
 
 
-@app.get("/api/bench")
-async def bench() -> dict:
-    cfg = get_cfg()
-    out: dict[str, Any] = {"sample": False, "cold": [], "learned": [], "cold_file": None, "learned_file": None,
-                           "aggregate": None}
-    try:
-        from bench.run_bench import compare, load_jsonl
-    except Exception:
-        compare = load_jsonl = None  # type: ignore
-    for mode in ("cold", "learned"):
-        p = _latest(cfg.runs_dir, mode)
-        if p and load_jsonl:
-            try:
-                out[mode] = load_jsonl(p)
-                out[f"{mode}_file"] = p.name
-            except Exception:
-                pass
-    if compare and out["cold"] and out["learned"]:
-        try:
-            out["aggregate"] = compare(out["cold"], out["learned"])
-        except Exception:
-            pass
-    return out
+@app.get("/api/secrets")
+async def secrets_list() -> dict:
+    return {"names": STATE.get_secrets().names()}
+
+
+@app.post("/api/secrets")
+async def secrets_set(body: SecretRequest, request: Request,
+                      x_access_code: Optional[str] = Header(default=None)) -> dict:
+    _require_key_admin(request, x_access_code)
+    if not _NAME_RE.match(body.name or "") or not body.value or len(body.value) > 500:
+        raise HTTPException(422, "Give a name (letters, digits, _ - .) and a value (max 500 chars).")
+    STATE.get_secrets().set(body.name, body.value)   # process memory only: never written to disk or events
+    return {"names": STATE.get_secrets().names()}
 
 
 # ---------------------------------------------------------------- static ---

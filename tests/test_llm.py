@@ -5,7 +5,6 @@ import pytest
 
 from webforge.config import Config
 from webforge.llm import BackboardLLM, MockLLM, ScriptedMock, make_llm
-from webforge.memory import LocalMemory, make_memory
 
 
 def run(c):
@@ -41,24 +40,6 @@ def test_scripted_mock():
 
 def test_make_llm_mock():
     assert isinstance(make_llm(Config(), mock=True), MockLLM)
-
-
-def test_local_memory(tmp_path):
-    cfg = Config(data_dir=tmp_path)
-    mem = make_memory(cfg, local_only=True)
-    assert isinstance(mem, LocalMemory)
-
-    async def go():
-        await mem.add("books.toscrape.com category links are in the left sidebar", {"domain": "books", "kind": "lesson"})
-        await mem.add("quotes pagination uses the Next button", {"domain": "quotes", "kind": "lesson"})
-        hits = await mem.search("how to click category sidebar links", 5)
-        assert hits and "sidebar" in hits[0]["content"] and hits[0]["score"] > 0
-        assert set(hits[0]) == {"content", "metadata", "score"}
-        assert len(await mem.list()) == 2
-        assert "- [lesson]" in await mem.lessons_for("quotes pagination")
-        await mem.reset()
-        assert await mem.list() == [] and await mem.search("sidebar") == []
-    run(go())
 
 
 @pytest.mark.skipif(os.getenv("WEBFORGE_LIVE") != "1", reason="set WEBFORGE_LIVE=1")
@@ -103,20 +84,6 @@ def test_allowed_domains_default_is_open_web(monkeypatch):
     assert Config().allowed_domains == []
     monkeypatch.setenv("WEBFORGE_ALLOWED_DOMAINS", "a.com, b.org")
     assert Config().allowed_domains == ["a.com", "b.org"]
-
-
-def test_memory_relevance_drops_unrelated_lessons():
-    from webforge.memory import relevant
-    hits = [
-        {"content": "Category pages list books on a single page when under 20 items", "metadata": {"domain": "books.toscrape.com"}, "score": 0.93},
-        {"content": "Article URLs follow /wiki/Title; the infobox shows the stable release", "metadata": {"domain": "en.wikipedia.org"}, "score": 0.92},
-        {"content": "Hacker News comment pages show the top comment first as .comtr rows", "metadata": {"domain": "news.ycombinator.com"}, "score": 0.5},
-    ]
-    assert relevant("What is the weather in Paris right now?", hits) == []
-    got = relevant("cheapest poetry books on books.toscrape.com", hits)
-    assert [h["metadata"]["domain"] for h in got] == ["books.toscrape.com"]
-    got = relevant("top hacker news comment for the first story", hits)
-    assert got and got[0]["metadata"]["domain"] == "news.ycombinator.com"
 
 
 async def test_submit_sends_tool_results_as_message_on_same_thread(tmp_path, monkeypatch):

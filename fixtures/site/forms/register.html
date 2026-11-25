@@ -1,0 +1,35 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Register - Fixture Hub</title></head>
+<body><main><h1>Event registration</h1>
+<form id="reg" novalidate>
+  <label for="name">Full name</label><input id="name" name="name" required>
+  <label for="email">Email</label><input id="email" name="email" type="email" required>
+  <label for="ticket">Ticket type</label>
+  <select id="ticket" name="ticket"><option value="">Choose...</option><option value="student">Student</option>
+    <option value="standard">Standard</option><option value="vip">VIP</option></select>
+  <fieldset><legend>Session</legend>
+    <input type="radio" id="am" name="session" value="am"><label for="am">Morning</label>
+    <input type="radio" id="pm" name="session" value="pm"><label for="pm">Afternoon</label></fieldset>
+  <input type="checkbox" id="terms" name="terms" required><label for="terms">I accept the terms</label>
+  <label for="card">Card number</label><input id="card" name="card" autocomplete="cc-number">
+  <button type="submit">Submit registration</button>
+</form>
+<div id="errors" class="errors" role="alert"></div>
+<div id="thanks" hidden></div>
+<script>
+document.getElementById('reg').addEventListener('submit', e => {
+  e.preventDefault();
+  const f = e.target, errs = [];
+  if (!f.name.value.trim()) errs.push('Full name is required');
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email.value)) errs.push('Enter a valid email');
+  if (!f.ticket.value) errs.push('Choose a ticket type');
+  if (!f.terms.checked) errs.push('You must accept the terms');
+  const box = document.getElementById('errors');
+  box.textContent = errs.join('. ');
+  if (errs.length) return;
+  f.hidden = true;
+  const t = document.getElementById('thanks');
+  const s = (f.querySelector('input[name=session]:checked') || {}).value || 'none';
+  t.textContent = `Thanks, ${f.name.value}! Registration confirmed: ${f.ticket.value} ticket, session ${s}. Confirmation code WF-4821.`;
+  t.hidden = false;
+});
+</script></main></body></html>

@@ -24,13 +24,18 @@ class Config:
     runs_dir: Path = field(default_factory=lambda: Path(os.getenv("WEBFORGE_RUNS", ROOT / "runs")))
     # hard cap on cumulative Backboard spend (persisted in data/spend.json); cheap model by default
     budget_usd: float = float(os.getenv("WEBFORGE_BUDGET_USD", "3.0"))
-    # global spend ledger: independent of data_dir so isolated bench dirs still count toward the cap
+    # global spend ledger: independent of data_dir so every run (and test dir) counts toward the cap
     ledger_file: Path = field(default_factory=lambda: Path(os.getenv("WEBFORGE_LEDGER", ROOT / "data" / "spend.json")))
     worker_max_steps: int = int(os.getenv("WEBFORGE_WORKER_STEPS", "25"))
     planner_max_steps: int = int(os.getenv("WEBFORGE_PLANNER_STEPS", "30"))
-    # research budget: after this many tool rounds the planner is told to answer; 3 rounds later only
-    # final_answer / workspace tools are allowed (stops endless re-searching on conflicting sources)
-    planner_soft_rounds: int = int(os.getenv("WEBFORGE_SOFT_ROUNDS", "6"))
+    # per-run budget: at 70% the planner is told to wrap up, at 100% research/browse tools are refused
+    run_budget_usd: float = float(os.getenv("WEBFORGE_RUN_BUDGET_USD", "0.25"))
+    run_deadline_s: float = float(os.getenv("WEBFORGE_RUN_DEADLINE_S", "600"))
+    # consequential actions (submit, send, login, delete...): ask | auto | deny. Payments are always blocked.
+    approval: str = field(default_factory=lambda: os.getenv("WEBFORGE_APPROVAL", "ask").strip().lower())
+    ask_timeout_s: float = float(os.getenv("WEBFORGE_ASK_TIMEOUT", "90"))
+    verify_rounds: int = int(os.getenv("WEBFORGE_VERIFY_ROUNDS", "2"))
+    screenshots: bool = os.getenv("WEBFORGE_SCREENSHOTS", "1") != "0"
     # parallel sub-agents / tabs per tool call (parallel_browse, read_urls, web_search queries)
     max_parallel: int = int(os.getenv("WEBFORGE_PARALLEL", "4"))
     # characters of page text shown to the worker per observation (read() pages through the rest)
@@ -42,13 +47,5 @@ class Config:
         "WEBFORGE_ALLOWED_DOMAINS", "*").split(",") if d.strip() and d.strip() != "*"])
 
     @property
-    def skills_dir(self) -> Path:
-        return self.data_dir / "skills"
-
-    @property
     def state_file(self) -> Path:
         return self.data_dir / "state.json"
-
-    @property
-    def memory_mirror(self) -> Path:
-        return self.data_dir / "memory.jsonl"

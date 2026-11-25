@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "webforge"
 version = "0.1.0"
-description = "A self-improving web-browsing deep agent: it turns successful browser traces into replayable skills."
+description = "An autonomous computer-use agent: plans, runs parallel browser sub-agents, asks before consequential actions and verifies its result."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Auro-rium" }]
@@ -15,7 +15,7 @@ dependencies = [
     "playwright>=1.45",
     "rich>=13",
     "python-dotenv>=1.0",
-    "pyyaml>=6",
+    "Pillow>=10",
     "fastapi",
     "uvicorn[standard]",
     "httpx",
@@ -30,11 +30,12 @@ Repository = "https://github.com/Auro-rium/web-forge"
 dev = ["pytest>=7", "pytest-asyncio>=0.23", "ruff"]
 
 [tool.setuptools.packages.find]
-include = ["webforge*", "bench*"]
+include = ["webforge*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = ["live: needs a real Backboard key and network (skipped otherwise)"]
 
 [tool.ruff]
 line-length = 120

@@ -1,1 +1,1 @@
-"""Agent roles: planner (orchestrator), worker (browsing sub-agent), reflector (lessons)."""
+"""Agent roles: planner (orchestrator), worker (browser sub-agent), verifier; analyst/searcher run via the LLM."""

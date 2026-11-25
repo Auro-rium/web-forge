@@ -1,9 +1,9 @@
 # --- agent runtime ---
-backboard-sdk>=1.5.19   # LLM + memory via Backboard
+backboard-sdk>=1.5.19   # LLM + web search via Backboard
 playwright>=1.45        # browser automation (then: playwright install chromium)
 rich>=13                # live terminal UI and tables
 python-dotenv>=1.0      # .env loading
-pyyaml>=6               # benchmark task file
+Pillow>=10              # shrinks live screenshots for the UI
 
 # --- web UI / API server ---
 fastapi

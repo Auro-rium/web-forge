@@ -1,7 +1,9 @@
 """Live terminal UI for WebForge runs (Rich), plus a plain line-per-event fallback."""
 from __future__ import annotations
 
+import asyncio
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 from rich.console import Console
@@ -20,12 +22,14 @@ STYLES = {
     "parallel": ("bold cyan", "⇉"),
     "read_urls": ("cyan", "▤"),
     "action": ("white", ">"),
-    "skill_run": ("magenta", "#"),
-    "skill_result": ("magenta", "#"),
     "observe": ("dim", "o"),
-    "lesson": ("yellow", "!"),
-    "skill_built": ("bold green", "+"),
-    "memory_hits": ("blue", "~"),
+    "ask": ("bold magenta", "?"),
+    "answer": ("magenta", "←"),
+    "analyze": ("cyan", "∑"),
+    "output": ("bold green", "+"),
+    "verify": ("yellow", "✓"),
+    "verdict": ("yellow", "✓"),
+    "resume": ("bold white", "↻"),
     "final": ("bold green", "="),
     "warn": ("bold red", "!"),
 }
@@ -55,26 +59,29 @@ def _describe(kind: str, d: dict) -> str:
         return f"web search: {_trunc(d.get('query', ''))}"
     if kind == "delegate":
         return f"delegate: {_trunc(d.get('subtask', ''))}"
-    if kind == "skill_run":
-        return f"skill {d.get('name')} {_trunc(d.get('params', ''), 60)}"
-    if kind == "skill_result":
-        return f"skill {d.get('name')} {'ok' if d.get('ok') else 'FAILED'}: {_trunc(d.get('message', ''), 70)}"
     if kind == "observe":
         return f"observe {_trunc(d.get('url', ''), 60)} ({d.get('n_elements', '?')} elements)"
     if kind == "action":
         mark = "ok" if d.get("ok", True) else "FAIL"
         return f"{d.get('action')} {_trunc(d.get('args', ''), 50)} [{mark}] {_trunc(d.get('message', ''), 50)}"
-    if kind == "memory_hits":
-        return f"memory: {_trunc(d.get('text', ''))}"
-    if kind == "skill_built":
-        return f"built skill {d.get('name')}"
-    if kind == "lesson":
-        return f"lesson: {_trunc(d.get('text', ''))}"
+    if kind == "ask":
+        return f"QUESTION: {_trunc(d.get('question', ''), 160)}"
+    if kind == "answer":
+        return f"answer: {_trunc(d.get('answer', ''))}"
+    if kind == "analyze":
+        return f"analyst: {_trunc(d.get('instruction', ''))} over {len(d.get('files') or [])} file(s)"
+    if kind == "output":
+        return f"deliverable saved: {d.get('name')} ({d.get('chars')} chars)"
+    if kind == "verdict":
+        return ("verified complete" if d.get("complete") else
+                f"verifier: incomplete, missing {_trunc(d.get('missing'), 80)}")
+    if kind == "resume":
+        return f"resuming with {d.get('files')} files, {d.get('todos')} todos"
     if kind == "final":
         return f"final: {_trunc(d.get('answer', ''))}"
     if kind == "warn":
         return f"warn: {_trunc(d.get('message', ''))}"
-    if kind == "nudge":
+    if kind in ("nudge", "verify", "budget"):
         return _trunc(d.get("message", ""))
     return f"{kind} {_trunc(d)}"
 
@@ -102,7 +109,12 @@ class PlainUI:
     def __exit__(self, *a):
         return False
 
+    async def ask(self, question: str, options: list) -> str:
+        return await _prompt(self.console, question, options)
+
     def on_event(self, kind: str, data: dict) -> None:
+        if kind == "screenshot":
+            return
         try:
             if kind == "todos":
                 for t in (data or {}).get("todos") or []:
@@ -126,8 +138,7 @@ class LiveUI:
         self.todos: list = []
         self.log: list[tuple[str, str]] = []
         self.steps = 0
-        self.skills_used = 0
-        self.skills_built = 0
+        self.outputs: list[str] = []
         self.interactive = self.console.is_terminal
         self._live: Optional[Live] = None
         self._plain = PlainUI(task, self.console)
@@ -150,18 +161,29 @@ class LiveUI:
                 self._live = None
         return False
 
+    # -- human in the loop: pause the live view while asking
+    async def ask(self, question: str, options: list) -> str:
+        live = self._live
+        if live is not None:
+            live.stop()
+        try:
+            return await _prompt(self.console, question, options)
+        finally:
+            if live is not None:
+                live.start()
+
     # -- events
     def on_event(self, kind: str, data: dict) -> None:
         data = data or {}
+        if kind == "screenshot":
+            return
         try:
             if kind == "todos":
                 self.todos = list(data.get("todos") or [])
             elif kind == "action":
                 self.steps += 1
-            elif kind == "skill_run":
-                self.skills_used += 1
-            elif kind == "skill_built":
-                self.skills_built += 1
+            elif kind == "output" and data.get("name") not in self.outputs:
+                self.outputs.append(data.get("name"))
             if kind != "todos":
                 self.log.append((kind, describe_event(kind, data)))
                 self.log = self.log[-200:]
@@ -193,8 +215,7 @@ class LiveUI:
             style, icon = STYLES.get(kind, ("white", "·"))
             log_txt.append(f"{icon} ", style=style)
             log_txt.append(_trunc(line, 110) + "\n", style=style)
-        stats = Text(f"steps: {self.steps}   skills used: {self.skills_used}   skills built: {self.skills_built}",
-                     style="bold")
+        stats = Text(f"browser steps: {self.steps}   deliverables: {', '.join(self.outputs) or '-'}", style="bold")
         layout = Layout()
         layout.split_column(Layout(header, size=3),
                             Layout(name="body"),
@@ -215,18 +236,30 @@ class _Fixed:
         yield from console.render(self.layout, options.update_height(self.height))
 
 
-def render_result(result, console: Optional[Console] = None) -> None:
+async def _prompt(console: Console, question: str, options: list) -> str:
+    console.print(Panel(question + (f"\n\noptions: {' / '.join(options)}" if options else ""),
+                        title="WebForge needs you", border_style="magenta"))
+    try:
+        return (await asyncio.to_thread(input, "your answer> ")).strip()
+    except (EOFError, KeyboardInterrupt):
+        return ""
+
+
+def render_result(result, console: Optional[Console] = None, run_dir: Optional[Path] = None) -> None:
     console = console or Console()
     console.print(Panel(str(result.answer or "(no answer)"), title="Final answer" + ("" if result.ok else " (incomplete)"),
                         border_style="green" if result.ok else "red"))
     t = Table(title="Metrics", show_header=False)
     t.add_column("metric", style="bold")
     t.add_column("value")
-    t.add_row("steps", str(result.steps))
+    t.add_row("browser steps", str(result.steps))
     t.add_row("llm_calls", str(result.llm_calls))
     t.add_row("tokens", f"{result.tokens:,}")
     t.add_row("cost", f"${result.cost_usd:.4f}")
     t.add_row("seconds", f"{result.seconds:.1f}")
-    t.add_row("skills used", ", ".join(result.skills_used) or "-")
-    t.add_row("skills created", ", ".join(result.skills_created) or "-")
+    v = result.verification or {}
+    if v:
+        t.add_row("verifier", "complete" if v.get("complete") else f"incomplete: {v.get('missing')}")
+    for name in result.outputs:
+        t.add_row("deliverable", str(Path(run_dir) / name) if run_dir else name)
     console.print(t)

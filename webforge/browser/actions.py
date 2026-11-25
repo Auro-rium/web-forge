@@ -1,9 +1,8 @@
-"""Action helpers: locator resolution, extraction, domain checks."""
+"""Action helpers: URL normalisation, extraction and generic page readers."""
 from __future__ import annotations
 
 import json
 from typing import Any, Optional
-from webforge.safety import domain_allowed  # noqa: F401  (re-exported for the browser session)
 
 
 EXTRACT_JS = r"""
@@ -44,35 +43,6 @@ def short_err(e: Exception, limit: int = 200) -> str:
 def normalize_url(url: str) -> str:
     url = (url or "").strip()
     return url if "://" in url or url.startswith(("about:", "data:")) else "https://" + url
-
-
-def locator_candidates(page, loc: dict) -> list:
-    """Playwright locators in resolution order: role+name, placeholder, text, css."""
-    c = []
-    if loc.get("role"):
-        kw = {"name": loc["name"], "exact": True} if loc.get("name") else {}
-        c.append(page.get_by_role(loc["role"], **kw))
-    if loc.get("placeholder"):
-        c.append(page.get_by_placeholder(loc["placeholder"]))
-    if loc.get("text"):
-        c.append(page.get_by_text(loc["text"], exact=True))
-    if loc.get("css"):
-        c.append(page.locator(loc["css"]))
-    return c
-
-
-async def resolve_locator(page, loc: Optional[dict]):
-    """First candidate with a visible match (its first visible element), else None."""
-    for cand in locator_candidates(page, loc or {}):
-        try:
-            n = await cand.count()
-            for i in range(min(n, 10)):
-                el = cand.nth(i)
-                if await el.is_visible():
-                    return el
-        except Exception:
-            continue
-    return None
 
 
 async def extract_rows(page, css: Optional[str], fields: Optional[dict]) -> dict:

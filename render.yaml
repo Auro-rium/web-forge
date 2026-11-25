@@ -17,7 +17,7 @@ services:
         value: "3"
       - key: WEBFORGE_CHROMIUM
         value: ""
-    # Skills/memory/spend live in /app/data. Without a disk they reset on every deploy.
+    # The spend ledger and saved key live in /app/data. Without a disk they reset on every deploy.
     # Persistent disks need a paid plan; uncomment to keep them:
     # disk:
     #   name: webforge-data
