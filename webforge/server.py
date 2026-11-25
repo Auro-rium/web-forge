@@ -360,7 +360,7 @@ async def _execute(run: Run, cfg: Config) -> None:
         run.pending[ask_id] = fut
         await _push(run, "ask_id", {"ask_id": ask_id, "question": question, "options": options,
                                     "timeout_s": cfg.ask_timeout_s, "agent": agent,
-                                    "kind": "approval" if (meta or {}).get("kind") == "approval" or str(question).startswith("Approve:") else "question",
+                                    "kind": "approval" if (meta or {}).get("kind") == "approval" else "question",
                                     "meta": meta or {}})
         try:
             return await fut

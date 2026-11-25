@@ -237,22 +237,26 @@ const QUIET = new Set(['screenshot', 'ask_id', 'metrics', 'agent_state']);   // 
 const NOLOG = new Set(['screenshot', 'ask_id', 'metrics']);                  // not in the Monitor log
 
 // ---- approvals / questions queue, keyed by ask_id --------------------------
-// Fallback for backends that do not send structured `meta` (older versions): parse the question text.
-function parseApproval(q) {
-  q = String(q || '');
-  const vi = q.search(/Form values:/i);
-  let head = (vi >= 0 ? q.slice(0, vi) : q).trim().replace(/\?+$/, '').trim();
-  const values = vi >= 0 ? q.slice(vi).replace(/^Form values:\s*/i, '').trim() : '';
-  const oi = head.lastIndexOf(' on http');
-  const reason = (oi >= 0 ? head.slice(0, oi) : head).trim().replace(/^Approve:\s*/i, '');
-  return { reason, url: oi >= 0 ? head.slice(oi + 4).trim() : '', values };
-}
-const titleOf = (reason) => { const m = String(reason).match(/^click\s+['"](.+)['"]\s*$/i); return m ? m[1] : String(reason); };
-const originOf = (u) => {
+// Everything shown on an approval card is derived from the structured `meta` (reason, url, fields). The host is taken
+// from the PARSED url (never from page-controlled text); the page-controlled button text is only shown as a quoted label.
+// Approvals without usable meta are never grouped and show the full question text (see `legacy`).
+const titleOf = (reason) => { const m = String(reason).match(/^click\s+['"](.+)['"]\s*$/i); return m ? m[1] : null; };
+function urlInfo(u) {
   u = String(u || '');
-  try { const o = new URL(u).origin; return o && o !== 'null' ? o : u; } catch { return u; }
-};
+  try {
+    const x = new URL(u);
+    if (x.protocol !== 'http:' && x.protocol !== 'https:') return { ok: false, raw: u, host: '', origin: 'raw:' + u };
+    return { ok: true, raw: u, host: x.host, origin: x.origin, base: x.protocol + '//' + x.host, ui: !!(x.username || x.password),
+      path: x.pathname + x.search + x.hash };
+  } catch { return { ok: false, raw: u, host: '', origin: 'raw:' + u }; }
+}
+// host first, never shortened; only the path is cut. Userinfo (user:pass@) is dropped from the text and flagged.
+function urlText(i) {
+  if (!i.ok) return i.raw ? 'not a recognised web address: ' + trunc(i.raw, 120) : '';
+  return i.base + trunc(i.path === '/' ? '' : i.path, 100) + (i.ui ? '  (the address has a login part before the host; it is ignored)' : '');
+}
 let askSeq = 0;
+const FIELDS_SHOWN = 12, VALUE_MAX = 200, NOTE_MS = 8000;
 
 const Asks = {
   map: new Map(),      // ask_id -> ask
@@ -261,30 +265,33 @@ const Asks = {
   say(text) { const s = $('#sr-status'); if (s) s.textContent = text; },
   note(text) {
     const box = $('#ask-notes'); if (!box) return;
-    const n = el('p', { class: 'small muted ask-note' }, text);
+    const n = el('p', { class: 'small ask-note' }, text);
     box.append(n);
-    setTimeout(() => n.remove(), 3200);
+    while (box.childElementCount > 6) box.firstElementChild.remove();
+    setTimeout(() => n.remove(), NOTE_MS);
+    this.say(text);
   },
   add(d) {
-    if (!d || !d.ask_id || this.map.has(d.ask_id)) return;
-    const q = String(d.question || '');
+    if (!d || (typeof d.ask_id !== 'string' && typeof d.ask_id !== 'number') || d.ask_id === '' || this.map.has(String(d.ask_id))) return;
+    const q = String(d.question == null ? '' : d.question);
     const meta = d.meta && typeof d.meta === 'object' && !Array.isArray(d.meta) ? d.meta : {};
-    const kind = d.kind || meta.kind || (/^Approve:/.test(q) ? 'approval' : 'question');
-    const a = { id: String(d.ask_id), q, options: Array.isArray(d.options) ? d.options : [], kind, agent: d.agent ? String(d.agent) : '',
-      deadline: Date.now() + (Number(d.timeout_s) || 90) * 1000, err: '', busy: false };
-    if (kind === 'approval') {
-      const hasMeta = meta.kind === 'approval' || typeof meta.reason === 'string';
-      const p = parseApproval(q);
-      a.reason = hasMeta && typeof meta.reason === 'string' ? meta.reason : p.reason;
-      a.url = hasMeta ? String(meta.url || '') : p.url;            // never derive the URL from text when meta exists
-      a.fields = [];
-      if (hasMeta && meta.fields && typeof meta.fields === 'object' && !Array.isArray(meta.fields)) {
-        for (const [k, v] of Object.entries(meta.fields).slice(0, 30)) a.fields.push([String(k), typeof v === 'string' ? v : JSON.stringify(v)]);
-      } else if (!hasMeta && p.values) a.fields.push(['', p.values]);
-      a.title = titleOf(a.reason);
-      a.origin = originOf(a.url);
-      a.gkey = 'g:' + a.reason + '\n' + a.origin;
-    } else a.gkey = 'q:' + a.id;
+    const wantsApproval = (d.kind || meta.kind) === 'approval' || /^Approve:/.test(q);
+    const options = Array.isArray(d.options) ? d.options.map(String) : [];
+    const a = { id: String(d.ask_id), q, options, kind: 'question', agent: d.agent ? String(d.agent) : '',
+      deadline: Date.now() + (Number(d.timeout_s) || 90) * 1000, err: '', busy: false, legacy: false, title: 'question' };
+    const fieldsOk = meta.fields == null || (typeof meta.fields === 'object' && !Array.isArray(meta.fields));
+    if (wantsApproval && meta.kind === 'approval' && typeof meta.reason === 'string' && typeof meta.url === 'string' && fieldsOk) {
+      a.kind = 'approval';
+      a.reason = meta.reason; a.url = meta.url;
+      a.info = urlInfo(meta.url);
+      a.fields = Object.entries(meta.fields || {}).map(([k, v]) => [String(k), typeof v === 'string' ? v : JSON.stringify(v)]);
+      a.label = titleOf(a.reason);
+      a.title = 'Action on ' + (a.info.ok ? a.info.host : 'an unrecognised address');
+      a.gkey = 'g:' + a.reason + '\n' + a.info.origin + '\n' + (a.info.ui ? 'ui' : '');
+    } else {
+      a.gkey = 'q:' + a.id;            // never grouped
+      if (wantsApproval) { a.legacy = true; a.title = 'approval'; if (!a.options.length) a.options = ['approve', 'deny']; }
+    }
     this.map.set(a.id, a);
     this.render(true);
   },
@@ -294,10 +301,10 @@ const Asks = {
   onAnswer(d) {
     d = d || {};
     const timedOut = /^No answer from the user/i.test(String(d.answer || ''));
-    let a = d.ask_id ? this.map.get(String(d.ask_id)) : null;
-    if (!a && !d.ask_id && d.agent) for (const x of this.map.values()) if (x.agent === d.agent) { a = x; break; }   // untagged: oldest ask of that agent
+    let a = d.ask_id != null ? this.map.get(String(d.ask_id)) : null;
+    if (!a && d.ask_id == null && d.agent) for (const x of this.map.values()) if (x.agent === d.agent) { a = x; break; }   // untagged: oldest ask of that agent
     if (!a) return;
-    if (timedOut) this.note('Timed out: "' + trunc(a.title || 'question', 60) + '". The agent moved on.');
+    if (timedOut) this.note('Timed out: "' + trunc(a.label || a.title, 60) + '". The agent moved on.');
     this.remove(a.id);
   },
   groups() {
@@ -309,7 +316,6 @@ const Asks = {
     if (!S.runId || !ids.length) return;
     const items = ids.map((i) => this.map.get(i)).filter(Boolean);
     if (!items.length || items.some((a) => a.busy)) return;             // double submit guard
-    // where focus should go afterwards (the item/card we are about to disable or remove)
     let focusId = null;
     if (!all) {
       const list = this.groups().get(items[0].gkey) || [];
@@ -322,15 +328,26 @@ const Asks = {
     this.render();
     try {
       const run = '/api/runs/' + encodeURIComponent(S.runId);
-      if (all) await postJSON(run + '/answer_all', { answer: String(text), ask_ids: ids });
-      else await postJSON(run + '/answer', { ask_id: ids[0], answer: String(text) });
-      for (const a of items) this.map.delete(a.id);
+      if (all) {
+        const res = await postJSON(run + '/answer_all', { answer: String(text), ask_ids: items.map((a) => a.id) });
+        for (const a of items) this.map.delete(a.id);
+        if (res && typeof res.resolved === 'number' && res.resolved < items.length) {
+          this.note((items.length - res.resolved) + ' of ' + items.length + ' had already expired or been answered, so your "' + text + '" did not reach the agent for them.');
+        }
+      } else {
+        await postJSON(run + '/answer', { ask_id: ids[0], answer: String(text) });
+        for (const a of items) this.map.delete(a.id);
+      }
     } catch (e) {
       const gone = e && (e.status === 404 || e.status === 409 || e.status === 410);
+      const unknownRun = gone && /unknown run/i.test(String(e.message));
       for (const a of items) {
         a.busy = false;
-        if (gone) { this.map.delete(a.id); this.note('"' + trunc(a.title || 'question', 60) + '" is no longer waiting (timed out); the agent moved on.'); }
-        else a.err = e.message || 'could not send';
+        if (gone) {
+          this.map.delete(a.id);
+          this.note(unknownRun ? 'The backend no longer knows this run (it may have restarted). Press Resume.'
+            : '"' + trunc(a.label || a.title, 60) + '" was already answered or had expired; nothing was sent.');
+        } else a.err = (e && e.message) || 'could not send';
       }
     }
     this.render();
@@ -342,45 +359,76 @@ const Asks = {
     if (c && c.approval) {
       const li = itemId && c.items.get(itemId);
       t = (li && !li.ok.disabled ? li.ok : null) || (!c.bAll.disabled ? c.bAll : null);
-    } else if (c && c.input && !c.input.disabled) t = c.input;
+    } else if (c && c.input && !c.input.disabled && !c.input.hidden) t = c.input;
     if (!t) { const first = $('#asks .ask button:not(:disabled)'); t = first || $('#ask-pill:not([hidden])'); }
     if (t) t.focus({ preventScroll: true });
   },
   buildCard(gkey, first) {
     const approval = first.kind === 'approval';
-    const c = { approval, items: new Map(), n: 0 };
+    const c = { approval, items: new Map(), n: 0, sig: '', lock: 0, confirmed: [] };
     const tid = 'ask-t-' + (++askSeq);
     c.title = el('span', { class: 'a-title', id: tid });
     c.timer = el('span', { class: 'muted mono small a-timer', 'aria-hidden': 'true' });
     c.sub = el('p', { class: 'small muted a-sub' });
+    c.label = el('p', { class: 'small a-label' });
     c.err = el('p', { class: 'small a-err', role: 'status' });
-    c.root = el('div', { class: 'card ask' + (approval ? ' approval' : ''), role: 'group', 'aria-labelledby': tid },
-      el('h3', null, c.title, ' ', c.timer), c.sub);
+    c.root = el('div', { class: 'card ask' + (approval ? ' approval' : first.legacy ? ' legacy' : ''), role: 'group', 'aria-labelledby': tid },
+      el('h3', null, c.title, ' ', c.timer), c.sub, c.label);
     if (approval) {
       c.list = el('ul', { class: 'ask-items' });
-      c.bAll = el('button', { class: 'btn primary', type: 'button', on: { click: () => this.send(this.idsOf(gkey), 'approve', true) } });
-      c.dAll = el('button', { class: 'btn danger', type: 'button', on: { click: () => this.send(this.idsOf(gkey), 'deny', true) } }, 'Deny all');
+      // "all" acts on the ids that were on screen and stable (c.confirmed), never on whatever joined a moment ago
+      const ids = () => c.confirmed.filter((id) => this.map.has(id));
+      c.bAll = el('button', { class: 'btn primary', type: 'button', on: { click: () => this.send(ids(), 'approve', true) } });
+      c.dAll = el('button', { class: 'btn danger', type: 'button', on: { click: () => this.send(ids(), 'deny', true) } }, 'Deny all');
       c.root.append(c.list, el('div', { class: 'row wrap-r ask-actions' }, c.bAll, c.dAll), c.err);
     } else {
       c.q = el('p', { class: 'ask-q' });
       c.opts = el('div', { class: 'row wrap-r' });
       c.input = el('input', { class: 'grow', autocomplete: 'off', placeholder: 'or type an answer', 'aria-label': 'your answer' });
-      const send = () => { const v = c.input.value.trim(); if (v && !c.input.disabled) this.send(this.idsOf(gkey), v, false); };
+      const send = () => { const v = c.input.value.trim(); if (v && !c.input.disabled) this.send([first.id], v, false); };
       c.input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); send(); } });
       c.btn = el('button', { class: 'btn primary', type: 'button', on: { click: send } }, 'Send');
-      c.root.append(c.q, c.opts, el('div', { class: 'row' }, c.input, c.btn), c.err);
+      c.inRow = el('div', { class: 'row' }, c.input, c.btn);
+      c.inRow.hidden = !!first.legacy;     // an approval whose details could not be verified: only the explicit options
+      c.root.append(c.q, c.opts, c.inRow, c.err);
     }
     return c;
   },
-  idsOf(gkey) { return (this.groups().get(gkey) || []).map((a) => a.id); },
-  buildItem(a) {
-    const li = { fields: el('div', { class: 'iv mono' }), url: el('div', { class: 'iu mono small muted' }), ok: null, no: null };
-    if (a.fields.length) {
-      for (const [k, v] of a.fields) {
-        li.fields.append(el('div', { class: 'f', title: (k ? k + ': ' : '') + v },
-          k ? el('span', { class: 'fk' }, k + ': ') : null, el('span', { class: 'fv' }, trunc(v, 200))));
+  buildFields(a) {
+    const box = el('div', { class: 'iv mono' });
+    if (!a.fields.length) { box.append(el('div', { class: 'f muted' }, '(no form values)')); return box; }
+    const row = ([k, v]) => {
+      const long = v.length > VALUE_MAX;
+      const vs = el('span', { class: 'fv' }, long ? v.slice(0, VALUE_MAX) + '…' : v);
+      const r = el('div', { class: 'f' }, k ? el('span', { class: 'fk' }, k + ': ') : null, vs);
+      if (long) {
+        const b = el('button', { class: 'more', type: 'button', 'aria-expanded': 'false' }, 'show all ' + v.length + ' characters');
+        b.addEventListener('click', () => {
+          const open = b.getAttribute('aria-expanded') === 'true';
+          vs.textContent = open ? v.slice(0, VALUE_MAX) + '…' : v;
+          b.setAttribute('aria-expanded', String(!open)); b.textContent = open ? 'show all ' + v.length + ' characters' : 'show less';
+        });
+        r.append(' ', b);
       }
-    } else li.fields.append(el('div', { class: 'f muted' }, '(no form values)'));
+      return r;
+    };
+    for (const f of a.fields.slice(0, FIELDS_SHOWN)) box.append(row(f));
+    if (a.fields.length > FIELDS_SHOWN) {
+      const rest = el('div', { class: 'f-rest' }); rest.hidden = true;
+      for (const f of a.fields.slice(FIELDS_SHOWN)) rest.append(row(f));
+      const n = a.fields.length - FIELDS_SHOWN;
+      const b = el('button', { class: 'more', type: 'button', 'aria-expanded': 'false' }, '+' + n + ' more field' + (n === 1 ? '' : 's'));
+      b.addEventListener('click', () => {
+        rest.hidden = !rest.hidden; b.setAttribute('aria-expanded', String(!rest.hidden));
+        b.textContent = rest.hidden ? '+' + n + ' more field' + (n === 1 ? '' : 's') : 'show fewer fields';
+      });
+      box.append(rest, b);
+    }
+    return box;
+  },
+  buildItem(a) {
+    const li = { url: el('div', { class: 'iu mono small' }), ok: null, no: null };
+    li.fields = this.buildFields(a);
     li.ok = el('button', { class: 'btn small', type: 'button', on: { click: () => this.send([a.id], 'approve', false) } }, 'approve');
     li.no = el('button', { class: 'btn small danger', type: 'button', on: { click: () => this.send([a.id], 'deny', false) } }, 'deny');
     li.root = el('li', null, laneTag(a.agent), el('div', { class: 'ibody' }, li.url, li.fields), el('span', { class: 'ib' }, li.ok, li.no));
@@ -398,27 +446,35 @@ const Asks = {
       c.err.textContent = list.map((a) => a.err).find(Boolean) || '';
       const busy = list.some((a) => a.busy);
       if (c.approval) {
+        const sig = list.map((a) => a.id).join(',');
+        if (sig !== c.sig) { c.sig = sig; c.lock = Date.now() + 1000; setTimeout(() => this.render(), 1050); }   // group changed: "all" is locked for ~1 s
+        const locked = Date.now() < c.lock;
+        if (!locked) c.confirmed = list.map((a) => a.id);
         const urls = new Set(list.map((a) => a.url));
         const same = urls.size <= 1;
         c.title.textContent = first.title + (n > 1 ? ' ×' + n : '');
-        c.sub.textContent = same ? (first.url ? 'on ' + trunc(first.url, 160) : '') : 'on ' + first.origin + ' (pages differ, each is listed below)';
-        c.sub.hidden = !c.sub.textContent;
+        c.sub.textContent = same ? (first.url ? 'on ' + urlText(first.info) : 'no address given') : 'on ' + (first.info.ok ? first.info.host : 'several addresses') + ' (the pages differ, each is listed below)';
+        c.sub.title = same ? first.url : '';
+        c.label.textContent = first.label != null ? 'Click button “' + trunc(first.label, 60) + '”' : 'Action “' + trunc(first.reason, 60) + '”';
+        c.label.title = first.reason;
         c.bAll.textContent = n > 1 ? 'Approve all (' + n + ')' : 'Approve';
         c.dAll.textContent = n > 1 ? 'Deny all' : 'Deny';
-        c.bAll.disabled = c.dAll.disabled = busy;
+        c.bAll.disabled = c.dAll.disabled = busy || locked;
         const seen = new Set();
         for (const a of list) {
           seen.add(a.id);
           let li = c.items.get(a.id);
           if (!li) { li = this.buildItem(a); c.items.set(a.id, li); c.list.append(li.root); }
-          li.url.textContent = same ? '' : a.url; li.url.hidden = same;
+          li.url.textContent = same ? '' : urlText(a.info); li.url.title = a.url; li.url.hidden = same;
           li.ok.disabled = li.no.disabled = a.busy;
         }
         for (const [id, li] of c.items) if (!seen.has(id)) { li.root.remove(); c.items.delete(id); }
         c.list.hidden = n === 1 && !list[0].fields.length && same;
-        if (c.n !== n) this.say('New approval: ' + first.title + ' (' + n + ')');
+        if (c.n !== n) this.say('New approval on ' + (first.info.ok ? first.info.host : 'an unrecognised address') + ': ' + trunc(first.label || first.reason, 60) + ' (' + n + ')');
       } else {
-        c.title.textContent = 'WebForge needs you' + (first.agent ? ' (' + first.agent + ')' : '');
+        c.title.textContent = (first.legacy ? 'Approval needed' : 'WebForge needs you') + (first.agent ? ' (' + first.agent + ')' : '');
+        c.sub.textContent = first.legacy ? 'This approval has no verified details. Read the full text below.' : ''; c.sub.hidden = !c.sub.textContent;
+        c.label.hidden = true;
         c.q.textContent = first.q;
         if (!c.opts.childElementCount && first.options.length) {
           for (const o of first.options) {
@@ -428,16 +484,17 @@ const Asks = {
         }
         for (const b of $$('button', c.root)) b.disabled = busy;
         c.input.disabled = busy;
-        if (!c.n) this.say('Question from ' + (first.agent || 'the agent'));
+        if (!c.n) this.say((first.legacy ? 'Approval needed from ' : 'Question from ') + (first.agent || 'the agent'));
       }
       c.n = n;
     }
     if (fresh && isNew && this.map.size === 1) fresh.root.scrollIntoView({ behavior: 'smooth', block: 'start' });
     const pill = $('#ask-pill');
     if (pill) {
-      const total = this.map.size, onlyAppr = Array.from(this.map.values()).every((a) => a.kind === 'approval');
+      const total = this.map.size, onlyAppr = Array.from(this.map.values()).every((a) => a.kind === 'approval' || a.legacy);
       pill.hidden = total === 0;
       pill.textContent = total + (onlyAppr ? (total === 1 ? ' approval' : ' approvals') : (total === 1 ? ' question' : ' questions')) + ' waiting ↑';
+      $('#live').classList.toggle('has-pill', total > 0);
     }
     this.tick();
     Live.updateStatus();
@@ -447,7 +504,7 @@ const Asks = {
     const now = Date.now();
     let expired = false;
     for (const a of Array.from(this.map.values())) {
-      if (a.deadline - now <= 0) { this.map.delete(a.id); expired = true; this.note('Timed out: "' + trunc(a.title || 'question', 60) + '". The agent moved on.'); }
+      if (a.deadline - now <= 0) { this.map.delete(a.id); expired = true; this.note('Timed out: "' + trunc(a.label || a.title, 60) + '". The agent moved on.'); }
     }
     if (expired) { this.render(); return; }
     for (const [k, c] of this.cards) {

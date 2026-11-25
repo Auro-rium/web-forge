@@ -45,6 +45,18 @@ def domain_allowed(url: str, allowed: Optional[list[str]]) -> bool:
     return any(host == d.lower() or host.endswith("." + d.lower()) for d in allowed)
 
 
+def strip_userinfo(url: str) -> tuple[str, bool]:
+    """Remove "user:pass@" from a URL so the real host is what a person sees. Returns (clean_url, had_userinfo)."""
+    try:
+        p = urlparse(url or "")
+        if p.scheme in ("http", "https") and ("@" in p.netloc):
+            host = p.netloc.rsplit("@", 1)[1]
+            return p._replace(netloc=host).geturl(), True
+    except ValueError:
+        pass
+    return url, False
+
+
 # ------------------------------------------------------------------ secrets ---
 class Secrets:
     """Named secret values. Loaded from WEBFORGE_SECRET_<NAME> env vars, plus values set at runtime (UI)."""

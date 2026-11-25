@@ -497,3 +497,13 @@ async def test_worker_caps_questions_per_subtask(base_url, br, cfg):
         return "ok"
     wr = await run_worker("t", base_url + "/index.html", llm=MockLLM(handler), browser=br, cfg=cfg, ask=ask)
     assert len(asked) == 3 and not wr.success
+
+
+def test_strip_userinfo_hides_nothing_from_the_consent_screen():
+    from webforge.safety import strip_userinfo
+    clean, had = strip_userinfo("https://school.org-" + "x" * 40 + "%2Fregister%2F" + "a" * 50 + "@evil.com/form?x=1")   # a literal "/" would end the host
+    assert had and clean == "https://evil.com/form?x=1"
+    assert strip_userinfo("https://user:pw@127.0.0.1:8000/a") == ("https://127.0.0.1:8000/a", True)
+    assert strip_userinfo("http://127.0.0.1:8765/forms/register.html") == ("http://127.0.0.1:8765/forms/register.html", False)
+    assert strip_userinfo("not a url") == ("not a url", False)
+    assert strip_userinfo("about:blank") == ("about:blank", False)

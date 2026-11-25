@@ -14,7 +14,7 @@ from typing import Any, Awaitable, Callable, Optional
 from urllib.parse import urlparse
 
 from webforge.agent.prompts import WORKER_SYSTEM, WORKER_TOOLS
-from webforge.safety import ALLOW, BLOCK, approval_question, check_action
+from webforge.safety import ALLOW, BLOCK, approval_question, check_action, strip_userinfo
 
 ACTIONS = {"goto", "click", "type", "select", "check", "fill_form", "press", "scroll", "back", "extract",
            "read", "tables", "links", "find", "structured"}
@@ -150,9 +150,11 @@ async def run_worker(subtask: str, start_url: Optional[str] = None, *, llm, brow
         fields = args.get("fields") or {e.name or f"[{e.idx}]": e.value for e in elements
                                          if e.tag in ("input", "select", "textarea") and e.value}
         shown = redact_fields(fields)
+        # the consent screen must show the REAL host: a page can sit at https://school.org-...@evil.com/
+        safe_url, had_userinfo = strip_userinfo(_url(browser))
         # structured copy for the UI: it must never have to parse the question text (the button name is page-controlled)
-        meta = {"kind": "approval", "reason": reason, "url": _url(browser), "fields": shown}
-        answer = await ask_human(approval_question(reason, _url(browser), shown),
+        meta = {"kind": "approval", "reason": reason, "url": safe_url, "fields": shown, "userinfo": had_userinfo}
+        answer = await ask_human(approval_question(reason, safe_url, shown),
                                  ["approve", "deny"], f"waiting for approval: {reason}"[:120], meta)
         if _approved(answer):
             return None
