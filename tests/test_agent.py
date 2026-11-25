@@ -321,7 +321,7 @@ def _ask_user_worker(base_url):
             return {"tool_calls": [{"name": "click", "args": {"idx": idx_of(message, "Submit registration")}}]}
         return {"tool_calls": [{"name": "fill_form", "args": {"fields": {
             "Full name": "Maya", "Email": "maya@school", "Ticket type": "VIP", "terms": True}}}]}
-    return MockLLM(handler)
+    return handler
 
 
 async def test_worker_ask_user_uses_the_humans_answer(base_url, br, cfg):
@@ -330,7 +330,7 @@ async def test_worker_ask_user_uses_the_humans_answer(base_url, br, cfg):
     async def ask(q, options, agent="planner"):
         asked.append((q, agent))
         return "approve" if "Submit registration" in q else "maya@school.org"
-    wr = await run_worker("register Maya", base_url + "/forms/register.html", llm=_ask_user_worker(base_url),
+    wr = await run_worker("register Maya", base_url + "/forms/register.html", llm=MockLLM(_ask_user_worker(base_url)),
                           browser=br, cfg=cfg, ask=ask, agent="w2", on_event=lambda k, d: events.append((k, d)))
     assert wr.success and "Thanks, Maya" in str(wr.data)
     assert any("rejected" in q and a == "w2" for q, a in asked)
@@ -352,6 +352,7 @@ async def test_worker_ask_user_without_callback(base_url, br, cfg):
 
 async def test_planner_agent_state_ask_agent_id_and_waiting(base_url, br, cfg):
     asked, events = [], []
+    maya = _ask_user_worker(base_url)
 
     def handler(role, message, thread_id, tools, system, kind):
         if role == "planner" and kind == "chat":
@@ -360,29 +361,20 @@ async def test_planner_agent_state_ask_agent_id_and_waiting(base_url, br, cfg):
                 {"subtask": "title", "start_url": base_url + "/index.html"}]}}]}
         if role == "planner":
             return final(message=message)
-        if role == "worker" and "register Maya" in message or "register Maya" in (system or "") and False:
-            pass
-        return None
-
-    ask_llm = _ask_user_worker(base_url)
-
-    def both(role, message, thread_id, tools, system, kind):
-        if role == "planner" or role not in ("worker",):
-            return handler(role, message, thread_id, tools, system, kind) if role == "planner" else '{"complete": true}'
-        if "SUBTASK: title" in message or "TITLE:" in message and "Event registration" not in message:
-            return {"tool_calls": [{"name": "done", "args": {"success": True, "summary": "ok"}}]}
-        return ask_llm._handler(role, message, thread_id, tools, system, kind)
+        if role == "worker":
+            if "SUBTASK: title" in message:
+                return {"tool_calls": [{"name": "done", "args": {"success": True, "summary": "ok"}}]}
+            return maya(role, message, thread_id, tools, system, kind)
+        return '{"complete": true}'
 
     async def on_ask(q, options, agent="planner"):
         asked.append(agent)
         return "approve" if "Submit registration" in q else "maya@school.org"
-    r = await run_task("register", llm=MockLLM(both), browser=br, cfg=cfg, on_ask=on_ask,
+    r = await run_task("register", llm=MockLLM(handler), browser=br, cfg=cfg, on_ask=on_ask,
                        on_event=lambda k, d: events.append((k, d)))
-    assert r.ok
-    assert set(asked) == {"w1"}
+    assert r.ok and set(asked) == {"w1"}
     for agent in ("w1", "w2"):
         st = [d["state"] for k, d in events if k == "agent_state" and d["agent"] == agent]
         assert st[0] == "running" and st[-1] == "done"
     assert "waiting" in [d["state"] for k, d in events if k == "agent_state" and d["agent"] == "w1"]
-    done = [d for k, d in events if k == "agent_state" and d["state"] == "done"]
-    assert all("steps" in d for d in done)
+    assert all("steps" in d for k, d in events if k == "agent_state" and d["state"] == "done")
