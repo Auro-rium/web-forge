@@ -456,3 +456,44 @@ async def test_verifier_sees_worker_data_and_deliverable_contents(base_url, br, 
         return verdict(message=message)
     r = await run_task("register Ada, save a CSV", llm=MockLLM(handler), browser=br, cfg=cfg)
     assert r.ok and r.verification["complete"] is True, r.verification
+
+
+async def test_worker_does_not_pester_the_human_with_the_same_question(base_url, br, cfg):
+    """Haiku sometimes re-asks an answered question; the human must be asked once and the agent reminded of the answer."""
+    calls = {"n": 0}
+
+    def handler(role, message, thread_id, tools, system, kind):
+        calls["n"] += 1
+        if "already answered" in message:
+            return {"tool_calls": [{"name": "done", "args": {"success": True, "summary": "used the earlier answer"}}]}
+        if calls["n"] > 12:
+            return {"tool_calls": [{"name": "done", "args": {"success": False, "summary": "still asking"}}]}
+        return {"tool_calls": [{"name": "ask_user", "args": {"question": "The form rejected the email 'maya@school'. What is Maya's correct email address?"}}]}
+    asked = []
+
+    async def ask(q, options, agent="planner", meta=None):
+        asked.append(q)
+        return "maya@school.org"
+    wr = await run_worker("register Maya", base_url + "/forms/register.html", llm=MockLLM(handler), browser=br,
+                          cfg=cfg, ask=ask)
+    assert wr.success and wr.summary == "used the earlier answer"
+    assert len(asked) == 1                                   # the human was asked exactly once
+
+
+async def test_worker_caps_questions_per_subtask(base_url, br, cfg):
+    asked = []
+    n = {"i": 0}
+
+    def handler(role, message, thread_id, tools, system, kind):
+        n["i"] += 1
+        if "question limit" in message:
+            return {"tool_calls": [{"name": "done", "args": {"success": False, "summary": "gave up asking"}}]}
+        qs = ["Which session should Maya join?", "What shirt size does Grace wear?", "Is Alan vegetarian?",
+              "Where should the receipt be mailed?", "Does Ada need parking?", "Who is the emergency contact?"]
+        return {"tool_calls": [{"name": "ask_user", "args": {"question": qs[n["i"] % len(qs)]}}]}
+
+    async def ask(q, options, agent="planner", meta=None):
+        asked.append(q)
+        return "ok"
+    wr = await run_worker("t", base_url + "/index.html", llm=MockLLM(handler), browser=br, cfg=cfg, ask=ask)
+    assert len(asked) == 3 and not wr.success

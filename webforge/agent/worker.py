@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
@@ -20,6 +21,15 @@ ACTIONS = {"goto", "click", "type", "select", "check", "fill_form", "press", "sc
 DATA_ACTIONS = {"extract"}   # the other readers already put their data in the message
 PAGE_CHANGING = {"goto", "click", "type", "select", "check", "fill_form", "press", "back"}
 SCREENSHOT_EVERY_S = 1.5
+MAX_QUESTIONS = 3        # distinct questions one sub-agent may put to the human
+MAX_ASK_CALLS = 8        # ask_user calls (including repeats) before the sub-agent is stopped
+
+
+def _similar(a: str, b: str) -> float:
+    """Word overlap (Jaccard) between two questions: same question reworded scores high."""
+    ta = {w for w in re.findall(r"[a-z0-9@.]+", a.lower()) if len(w) > 2}
+    tb = {w for w in re.findall(r"[a-z0-9@.]+", b.lower()) if len(w) > 2}
+    return len(ta & tb) / len(ta | tb) if ta and tb else 0.0
 NO_USER = "No user is available to answer. Proceed with your best judgment and state the assumption."
 
 
@@ -80,6 +90,7 @@ async def run_worker(subtask: str, start_url: Optional[str] = None, *, llm, brow
     elements: list = []
     last_shot = [0.0]
     denied: list[str] = []
+    ask_calls = 0
     answered: list[tuple[str, str]] = []
     agent_id = [agent]
 
@@ -212,12 +223,22 @@ async def run_worker(subtask: str, start_url: Optional[str] = None, *, llm, brow
                     succ = succ.strip().lower() not in ("false", "0", "no")
                 return result(bool(succ), redact(str(a.get("summary", "")))[:2000], a.get("data"))
             if tc.name == "ask_user":
+                ask_calls += 1
+                if ask_calls > MAX_ASK_CALLS:   # ask_user is not a browser step, so bound it explicitly
+                    return result(False, "stopped: the sub-agent kept asking questions instead of acting")
                 a = tc.args or {}
                 q = str(a.get("question", "")).strip()
                 if not q:
                     out = "ERROR: question is required"
                 elif ask is None:
                     out = NO_USER
+                elif (prev := next((ans for pq, ans in answered if _similar(q, pq) >= 0.5), None)) is not None:
+                    # models sometimes re-ask an answered question; never pester the human twice for the same thing
+                    out = (f"USER ANSWER (already answered; do not ask again): {prev}. Apply it now with fill_form / "
+                           "type, then continue with the subtask.")
+                elif len(answered) >= MAX_QUESTIONS:
+                    out = (f"You have reached the question limit ({MAX_QUESTIONS}) for this subtask. Proceed with "
+                           "what you have, or call done(success=false) explaining what is missing.")
                 else:
                     opts = [str(o) for o in (a.get("options") or [])][:6]
                     ans = redact(await ask_human(q, opts, "asked the user: " + q[:100]))
