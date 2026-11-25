@@ -20,7 +20,15 @@ Say: "WebForge is an autonomous computer-use agent. You give it a job. A planner
 
 Show the **Architecture** tab.
 
-### Beat 2: act on a real form, with approval (about 40 s)
+### Beat 2 (headline): class registration with a human in the loop (about 60-90 s)
+
+Start the offline form site (`python -m webforge serve-fixtures`), and for the full effect drive your own Chrome (`python -m webforge chrome`, then `export WEBFORGE_CDP_URL=http://127.0.0.1:9222` before `python -m webforge serve`). Click the **class registration** chip, or paste the text in `fixtures/site/demo/class_list.txt`.
+
+Watch: four agents open four tabs **at once** in your Chrome (badge "WebForge · w2 · typing email…", the field being typed is outlined); one student's email is rejected by the form, so that agent **asks the teacher** and the tab jumps to the front; the teacher answers; then one grouped card "Submit registration x4" appears and a single **Approve all** submits all four. Four confirmation codes and `registrations.csv` appear, the verifier shows a tick, and the **Monitor** section shows live gauges, the per-agent table and the log (download as `.jsonl`).
+
+Measured (live, Haiku 5.5, headless own Chromium, simulated teacher): **3 of 3 runs passed** after the fixes, 62-102 s, 22-34 LLM calls, about $0.008-0.012 each, four distinct codes plus a correct CSV, verifier complete every time. Before the fixes two of two completed runs failed (a sub-agent re-asked the same question 30 times; the verifier judged on truncated evidence), which is why those are now fixed in code. Not run live here: driving your own installed Chrome (tested only against a Chrome started by the same launcher).
+
+### Beat 3 (quick backup): act on a real form, with approval (about 40 s)
 
 Chip **fill a form**, or paste:
 
