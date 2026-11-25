@@ -23,7 +23,7 @@ def test_approval_validation():
 
 
 def test_cdp_option_sets_env(monkeypatch):
-    monkeypatch.delenv("WEBFORGE_CDP_URL", raising=False)
+    monkeypatch.setenv("WEBFORGE_CDP_URL", "")   # registers cleanup BEFORE main() writes the variable (teardown removes it)
     seen = {}
 
     async def fake(args, task, run_dir, resume=None):
@@ -33,7 +33,6 @@ def test_cdp_option_sets_env(monkeypatch):
     monkeypatch.setattr(cli, "_cmd_run", fake)
     assert cli.main(["run", "t", "--cdp", "http://127.0.0.1:9333"]) == 0
     assert seen["cdp"] == "http://127.0.0.1:9333"
-    monkeypatch.delenv("WEBFORGE_CDP_URL", raising=False)
 
 
 def test_chrome_command_output(monkeypatch, capsys, tmp_path):

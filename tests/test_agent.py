@@ -64,7 +64,7 @@ def _register_worker(base_url, submit_answers):
             "Full name": "Ada Lovelace", "Email": "ada@example.org", "Ticket type": "VIP", "terms": True}}}]}
     asked = []
 
-    async def ask(q, options, agent="planner"):
+    async def ask(q, options, agent="planner", meta=None):
         asked.append(q)
         return submit_answers.pop(0) if submit_answers else ""
     return MockLLM(handler), ask, asked
@@ -228,7 +228,7 @@ async def test_analyze_in_separate_context_and_deliverable(cfg):
 async def test_ask_user_with_and_without_answer(cfg):
     asked = []
 
-    async def on_ask(q, options, agent="planner"):
+    async def on_ask(q, options, agent="planner", meta=None):
         asked.append((q, options))
         return "the VIP plan"
     def script():
@@ -327,7 +327,7 @@ def _ask_user_worker(base_url):
 async def test_worker_ask_user_uses_the_humans_answer(base_url, br, cfg):
     asked, events = [], []
 
-    async def ask(q, options, agent="planner"):
+    async def ask(q, options, agent="planner", meta=None):
         asked.append((q, agent))
         return "approve" if "Submit registration" in q else "maya@school.org"
     wr = await run_worker("register Maya", base_url + "/forms/register.html", llm=MockLLM(_ask_user_worker(base_url)),
@@ -367,7 +367,7 @@ async def test_planner_agent_state_ask_agent_id_and_waiting(base_url, br, cfg):
             return maya(role, message, thread_id, tools, system, kind)
         return '{"complete": true}'
 
-    async def on_ask(q, options, agent="planner"):
+    async def on_ask(q, options, agent="planner", meta=None):
         asked.append(agent)
         return "approve" if "Submit registration" in q else "maya@school.org"
     r = await run_task("register", llm=MockLLM(handler), browser=br, cfg=cfg, on_ask=on_ask,
@@ -378,3 +378,81 @@ async def test_planner_agent_state_ask_agent_id_and_waiting(base_url, br, cfg):
         assert st[0] == "running" and st[-1] == "done"
     assert "waiting" in [d["state"] for k, d in events if k == "agent_state" and d["agent"] == "w1"]
     assert all("steps" in d for k, d in events if k == "agent_state" and d["state"] == "done")
+
+
+async def test_planner_learns_what_the_user_already_answered(base_url, br, cfg):
+    """A sub-agent's question and the user's answer reach the planner, so it never asks the user to re-confirm it."""
+    def handler(role, message, thread_id, tools, system, kind):
+        if role == "planner" and kind == "chat":
+            return {"tool_calls": [{"name": "delegate_browse", "args": {"subtask": "register Maya", "start_url": base_url + "/forms/register.html"}}]}
+        if role == "planner":
+            return final(message=message)
+        if role == "worker":
+            if "USER ANSWER" in message:
+                return {"tool_calls": [{"name": "done", "args": {"success": True, "summary": "registered Maya", "data": "ok"}}]}
+            return {"tool_calls": [{"name": "ask_user", "args": {"question": "What is Maya's correct email?"}}]}
+        return '{"complete": true}'
+
+    async def ask(q, options, agent="planner", meta=None):
+        return "maya@school.org"
+    r = await run_task("register Maya", llm=MockLLM(handler), browser=br, cfg=cfg, on_ask=ask)
+    assert "USER ALREADY ANSWERED" in r.answer and "maya@school.org" in r.answer and "do not ask" in r.answer.lower()
+
+
+async def test_approval_carries_structured_meta_not_just_text(base_url, br, cfg):
+    """The UI must not parse the question text: the page-controlled button name could spoof a URL."""
+    seen = []
+
+    async def ask(q, options, agent="planner", meta=None):
+        seen.append((q, agent, meta))
+        return "approve"
+    llm, _ask, _asked = _register_worker(base_url, [])
+    wr = await run_worker("register Ada", base_url + "/forms/register.html", llm=llm, browser=br, cfg=cfg,
+                          ask=ask, agent="w3")
+    assert wr.success
+    q, agent, meta = seen[0]
+    assert agent == "w3" and meta["kind"] == "approval"
+    assert meta["reason"] == "click 'Submit registration'"
+    assert meta["url"].endswith("/forms/register.html")
+    assert meta["fields"]["Full name"] == "Ada Lovelace"
+
+
+async def test_planner_forwards_meta_to_on_ask(base_url, br, cfg):
+    got = []
+
+    async def on_ask(q, options, agent="planner", meta=None):
+        got.append((agent, meta))
+        return "approve"
+
+    def handler(role, message, thread_id, tools, system, kind):
+        if role == "planner" and kind == "chat":
+            return {"tool_calls": [{"name": "delegate_browse", "args": {"subtask": "register Ada", "start_url": base_url + "/forms/register.html"}}]}
+        if role == "planner":
+            return final(message=message)
+        if role == "worker":
+            return _register_worker(base_url, [])[0].handler(role, message, thread_id, tools, system, kind)
+        return '{"complete": true}'
+    await run_task("register", llm=MockLLM(handler), browser=br, cfg=cfg, on_ask=on_ask)
+    assert got and got[0][0] == "w1" and got[0][1]["kind"] == "approval" and got[0][1]["fields"]
+
+
+async def test_verifier_sees_worker_data_and_deliverable_contents(base_url, br, cfg):
+    """It must judge on the confirmation text a worker returned and on what the CSV really contains."""
+    def verdict(**kw):
+        m = kw["message"]
+        ok = "Confirmation code WF-1111" in m and "Ada,WF-1111" in m
+        return json.dumps({"complete": ok, "missing": [] if ok else ["evidence not visible"], "verdict": "x"})
+
+    def handler(role, message, thread_id, tools, system, kind):
+        if role == "planner" and kind == "chat":
+            return {"tool_calls": [
+                {"name": "write_file", "args": {"name": "outputs/r.csv", "content": "name,code\nAda,WF-1111\n"}},
+                {"name": "delegate_browse", "args": {"subtask": "register Ada", "start_url": base_url + "/index.html"}}]}
+        if role == "planner":
+            return {"tool_calls": [{"name": "final_answer", "args": {"answer": "Ada registered, code WF-1111"}}]}
+        if role == "worker":
+            return {"tool_calls": [{"name": "done", "args": {"success": True, "summary": "registered",
+                                                             "data": "Thanks, Ada! ... Confirmation code WF-1111."}}]}
+        return verdict(message=message)
+    r = await run_task("register Ada, save a CSV", llm=MockLLM(handler), browser=br, cfg=cfg)
+    assert r.ok and r.verification["complete"] is True, r.verification

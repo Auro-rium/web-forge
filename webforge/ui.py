@@ -110,7 +110,7 @@ class PlainUI:
     def __exit__(self, *a):
         return False
 
-    async def ask(self, question: str, options: list, agent: str = "planner") -> str:
+    async def ask(self, question: str, options: list, agent: str = "planner", meta: Optional[dict] = None) -> str:
         return await _prompt(self.console, question, options)
 
     def on_event(self, kind: str, data: dict) -> None:
@@ -181,7 +181,7 @@ class LiveUI:
         return False
 
     # -- human in the loop: pause the live view while asking
-    async def ask(self, question: str, options: list, agent: str = "planner") -> str:
+    async def ask(self, question: str, options: list, agent: str = "planner", meta: Optional[dict] = None) -> str:
         live = self._live
         if live is not None:
             live.stop()

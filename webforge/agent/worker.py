@@ -32,6 +32,7 @@ class WorkerResult:
     trace: list = field(default_factory=list)   # list[TraceStep]
     domain: str = ""
     denied: list = field(default_factory=list)  # actions the user (or the approval mode) refused
+    answered: list = field(default_factory=list)  # (question, answer) pairs the user already answered
 
 
 def _emit(on_event: Optional[Callable], kind: str, data: dict) -> None:
@@ -79,6 +80,7 @@ async def run_worker(subtask: str, start_url: Optional[str] = None, *, llm, brow
     elements: list = []
     last_shot = [0.0]
     denied: list[str] = []
+    answered: list[tuple[str, str]] = []
     agent_id = [agent]
 
     def redact(text: str) -> str:
@@ -89,7 +91,7 @@ async def run_worker(subtask: str, start_url: Optional[str] = None, *, llm, brow
 
     def result(success: bool, summary: str, data: Any = None) -> WorkerResult:
         return WorkerResult(success=success, summary=summary, data=data, steps=steps, denied=list(denied),
-                            trace=list(browser.trace[trace_start:]),
+                            trace=list(browser.trace[trace_start:]), answered=list(answered),
                             domain=(urlparse(_url(browser)).hostname or "").lower())
 
     async def screenshot(force: bool = False) -> None:
@@ -100,7 +102,7 @@ async def run_worker(subtask: str, start_url: Optional[str] = None, *, llm, brow
         if img and len(img) < 120_000:
             _emit(on_event, "screenshot", {"jpeg_b64": base64.b64encode(img).decode(), "url": _url(browser)})
 
-    async def ask_human(question: str, options: list, last: str) -> str:
+    async def ask_human(question: str, options: list, last: str, meta: Optional[dict] = None) -> str:
         """Ask the human with the tab flagged for attention and agent_state waiting/running around it."""
         att = getattr(browser, "attention", None)
         _emit(on_event, "agent_state", {"state": "waiting", "last": last})
@@ -110,7 +112,7 @@ async def run_worker(subtask: str, start_url: Optional[str] = None, *, llm, brow
             except Exception:
                 pass
         try:
-            return await ask(question, options, agent_id[0]) or ""
+            return (await (ask(question, options, agent_id[0], meta) if meta else ask(question, options, agent_id[0]))) or ""
         finally:
             if att:
                 try:
@@ -136,8 +138,11 @@ async def run_worker(subtask: str, start_url: Optional[str] = None, *, llm, brow
         await screenshot(force=True)
         fields = args.get("fields") or {e.name or f"[{e.idx}]": e.value for e in elements
                                          if e.tag in ("input", "select", "textarea") and e.value}
-        answer = await ask_human(approval_question(reason, _url(browser), redact_fields(fields)),
-                                 ["approve", "deny"], f"waiting for approval: {reason}"[:120])
+        shown = redact_fields(fields)
+        # structured copy for the UI: it must never have to parse the question text (the button name is page-controlled)
+        meta = {"kind": "approval", "reason": reason, "url": _url(browser), "fields": shown}
+        answer = await ask_human(approval_question(reason, _url(browser), shown),
+                                 ["approve", "deny"], f"waiting for approval: {reason}"[:120], meta)
         if _approved(answer):
             return None
         _emit(on_event, "action", {"action": name, "args": args, "ok": False, "message": "DENIED by user: " + reason})
@@ -215,7 +220,9 @@ async def run_worker(subtask: str, start_url: Optional[str] = None, *, llm, brow
                     out = NO_USER
                 else:
                     opts = [str(o) for o in (a.get("options") or [])][:6]
-                    out = "USER ANSWER: " + redact(await ask_human(q, opts, "asked the user: " + q[:100]))
+                    ans = redact(await ask_human(q, opts, "asked the user: " + q[:100]))
+                    answered.append((q[:200], ans[:200]))
+                    out = "USER ANSWER: " + ans
             elif tc.name not in ACTIONS:
                 out = f"ERROR: unknown tool '{tc.name}'"
             elif steps >= max_steps:

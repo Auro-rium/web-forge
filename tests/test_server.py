@@ -509,3 +509,35 @@ def test_execute_open_browser_runtime_error_is_clean(client, cfg, monkeypatch):
     assert info["error"] == "approval=auto is refused with your own Chrome"
     errs = [e for e in server.STATE.runs[rid].events if e["kind"] == "error"]
     assert errs and "Traceback" not in errs[0]["data"]["message"]
+
+
+def test_metrics_do_not_crowd_out_real_events_and_are_not_persisted(client, cfg, monkeypatch):
+    monkeypatch.setattr(server, "MAX_EVENTS", 20)
+
+    async def fake(run, cfg_):
+        for i in range(60):
+            await server._push(run, "metrics", {"elapsed": i})
+            if i % 10 == 0:
+                await server._push(run, "action", {"message": f"real {i}"})
+        await server._push(run, "final", {"answer": "ok", "ok": True})
+        await server._finish(run, "done")
+    monkeypatch.setattr(server, "_execute", fake)
+    rid = client.post("/api/run", json={"task": "t"}).json()["run_id"]
+    with client.stream("GET", f"/api/runs/{rid}/events") as resp:
+        body = "".join(resp.iter_text())
+    assert body.count('"kind": "action"') == 6                      # every real event survived
+    assert body.count('"kind": "metrics"') <= 3                     # only the latest metrics frame is kept
+    assert _wait(lambda: (cfg.runs_dir / rid / "events.json").exists())
+    assert '"metrics"' not in (cfg.runs_dir / rid / "events.json").read_text()
+
+
+async def test_metrics_elapsed_and_cost_include_time_before_a_resume(cfg):
+    class L:
+        def usage(self):
+            return {"cost_usd": 0.5, "calls": 3, "tokens": 10}
+    run = server.Run("r", server.RunRequest(task="t"), resume={"elapsed": 100.0, "spent": 0.2})
+    task = asyncio.create_task(server._metrics_ticker(run, cfg, L(), interval=0.01))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    m = [e for e in run.events if e["kind"] == "metrics"][-1]["data"]
+    assert m["elapsed"] >= 100.0 and abs(m["run_cost"] - 0.2) < 1e-6    # 0.5 - 0.5 baseline + 0.2 already spent

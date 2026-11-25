@@ -35,12 +35,14 @@ def _clip(s: Any, n: int = MAX_OUT) -> str:
     return s if len(s) <= n else s[:n] + f"...[truncated {len(s) - n} chars]"
 
 
-async def ask_with_timeout(on_ask: Optional[AskFn], question: str, options: list, timeout: float, agent: str = "planner") -> str:
+async def ask_with_timeout(on_ask: Optional[AskFn], question: str, options: list, timeout: float, agent: str = "planner",
+                           meta: Optional[dict] = None) -> str:
     """Ask the human; no callback, timeout, error or empty reply all become NO_ANSWER."""
     if on_ask is None:
         return NO_ANSWER
     try:
-        ans = await asyncio.wait_for(on_ask(question, options, agent), timeout=timeout)
+        call = on_ask(question, options, agent, meta) if meta else on_ask(question, options, agent)
+        ans = await asyncio.wait_for(call, timeout=timeout)
     except Exception:
         return NO_ANSWER
     return (ans or "").strip() or NO_ANSWER
@@ -138,9 +140,9 @@ async def run_task(task: str, *, llm, browser, cfg, on_event: Optional[Callable]
             emit(kind, {**(data or {}), "agent": agent})
         return _ev
 
-    async def ask_human(question: str, options: list, agent: str = "planner") -> str:
+    async def ask_human(question: str, options: list, agent: str = "planner", meta: Optional[dict] = None) -> str:
         emit("ask", {"question": question, "options": options, "agent": agent})
-        ans = await ask_with_timeout(on_ask, question, options, float(cfg.ask_timeout_s), agent)
+        ans = await ask_with_timeout(on_ask, question, options, float(cfg.ask_timeout_s), agent, meta)
         emit("answer", {"answer": ans, "agent": agent})
         digest.append(f"asked user: {question[:160]} -> {ans[:120]}")
         return ans
@@ -164,14 +166,19 @@ async def run_task(task: str, *, llm, browser, cfg, on_event: Optional[Callable]
         ev("agent_state", {"state": "done" if wr.success else "failed", "steps": wr.steps,
                            "last": wr.summary[:100]})
         stats["steps"] += wr.steps
+        data = "" if wr.data is None else json.dumps(wr.data, default=str, ensure_ascii=False)
         digest.append(f"[{agent}] '{subtask[:120]}' -> {'ok' if wr.success else 'FAILED'} in {wr.steps} steps: "
-                      f"{wr.summary[:200]}")
+                      f"{wr.summary[:300]} | returned data: {data[:500]}")
         return wr
 
     def _report(agent: str, wr: WorkerResult) -> str:
         data = "" if wr.data is None else json.dumps(wr.data, default=str, ensure_ascii=False)
         head = (f"[{agent}] {'SUCCESS' if wr.success else 'FAILED'} ({wr.steps} steps, {wr.domain})\n"
                 f"summary: {wr.summary}\n")
+        if wr.answered:
+            qa = "; ".join(f"Q: {q} -> A: {a}" for q, a in wr.answered)
+            head += (f"USER ALREADY ANSWERED (confirmed by the user, so do not ask them to confirm or repeat it): "
+                     f"{qa}\n")
         if wr.denied:
             head += (f"USER DID NOT APPROVE: {'; '.join(wr.denied)}. Do not retry it and do not start another "
                      "sub-agent for it: tell the user in final_answer that it was not done and why.\n")
@@ -347,7 +354,10 @@ async def run_task(task: str, *, llm, browser, cfg, on_event: Optional[Callable]
             return None
         stats["verify_rounds"] += 1
         emit("verify", {"message": f"verifier checking the answer ({stats['verify_rounds']}/{cfg.verify_rounds})"})
-        verification = await verify(task, candidate, digest, sorted(workspace), llm)
+        # the verifier judges on evidence: the tool trail plus what the deliverable files really contain
+        files = [f"FILE {n} ({len(workspace[n])} chars):\n{workspace[n][:1500]}" for n in sorted(workspace)
+                 if n.startswith("outputs/")]
+        verification = await verify(task, candidate, digest + files, sorted(workspace), llm)
         emit("verdict", verification)
         if verification.get("complete", True):
             return None

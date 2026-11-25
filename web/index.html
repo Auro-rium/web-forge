@@ -109,9 +109,10 @@
     </div>
     <p class="task-line" id="live-task"></p>
 
-    <div id="asks" class="asks" aria-live="polite"></div>
+    <div id="ask-notes" class="ask-notes" aria-hidden="true"></div>
+    <div id="asks" class="asks"></div>
 
-    <div class="card mission" id="mission">
+    <div class="card mission" id="mission" hidden>
       <h3>Mission control <span class="muted small">(one tile per sub-agent)</span></h3>
       <p class="ctl-line small" id="ctl-line" hidden></p>
       <p class="ctl-note small" id="ctl-note" hidden>These tabs are open in your Chrome window.</p>
@@ -128,7 +129,7 @@
       <div class="col">
         <div class="card">
           <h3>Activity</h3>
-          <ol id="timeline" class="timeline" aria-live="polite"></ol>
+          <ol id="timeline" class="timeline"></ol>
         </div>
       </div>
     </div>
@@ -225,6 +226,8 @@
   └─────────────────────── deliver ◂──────────────────────┘</pre>
   <p class="muted small">Agent output is untrusted, so everything on this page is rendered as plain text.</p>
 </footer>
+<div id="sr-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+<button id="ask-pill" class="ask-pill" type="button" hidden aria-label="Jump to the approvals waiting for you"></button>
 <noscript><p class="wrap">This page needs JavaScript.</p></noscript>
 <script src="app.js"></script>
 <script src="fx.js"></script>

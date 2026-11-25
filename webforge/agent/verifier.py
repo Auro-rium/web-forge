@@ -23,7 +23,7 @@ async def verify(task: str, answer: str, evidence: list[str], files: list[str], 
     """Return {complete, missing, unsupported_claims, verdict}. Fails open (complete=True) on errors,
     so a broken verifier can never trap a run."""
     msg = (f"TASK:\n{task}\n\nCANDIDATE FINAL ANSWER:\n{answer[:6000]}\n\n"
-           f"EVIDENCE (tool calls and short results, latest last):\n" + "\n".join(evidence[-60:])[:6000] +
+           f"EVIDENCE (tool calls and short results, latest last):\n" + "\n".join(evidence[-70:])[-9000:] +
            f"\n\nWORKSPACE FILES: {', '.join(files) or '(none)'}\n\nReturn the verdict JSON.")
     try:
         reply = await llm.chat(role="verifier", message=msg, system=VERIFIER_SYSTEM, tools=[], json_output=True)

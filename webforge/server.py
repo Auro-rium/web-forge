@@ -269,6 +269,8 @@ async def _push(run: Run, kind: str, data: dict) -> None:
     if kind == "screenshot":   # live-only: replace the previous frame of the same agent instead of piling up
         run.events = [e for e in run.events
                       if not (e["kind"] == "screenshot" and e["data"].get("agent") == data.get("agent"))]
+    elif kind == "metrics":    # live-only gauges: only the latest frame is worth keeping (and must not crowd out real events)
+        run.events = [e for e in run.events if e["kind"] != "metrics"]
     if len(run.events) >= MAX_EVENTS:
         run.events.pop(1 if len(run.events) > 1 else 0)
     run.events.append(ev)
@@ -296,6 +298,8 @@ async def _metrics_ticker(run: Run, cfg: Config, llm: Any, interval: float = 1.0
             return {}
 
     base_cost = float(usage().get("cost_usd", 0) or 0)
+    done_cost = float((run.resume or {}).get("spent", 0) or 0)       # spent before this (resumed) run started
+    done_secs = float((run.resume or {}).get("elapsed", 0) or 0)
     while True:
         try:
             u = usage()
@@ -304,8 +308,8 @@ async def _metrics_ticker(run: Run, cfg: Config, llm: Any, interval: float = 1.0
             except Exception:
                 spend = 0.0
             await _push(run, "metrics", {
-                "elapsed": round(time.time() - run.started, 1), "deadline_s": cfg.run_deadline_s,
-                "run_cost": round(max(float(u.get("cost_usd", 0) or 0) - base_cost, 0.0), 6),
+                "elapsed": round(done_secs + time.time() - run.started, 1), "deadline_s": cfg.run_deadline_s,
+                "run_cost": round(done_cost + max(float(u.get("cost_usd", 0) or 0) - base_cost, 0.0), 6),
                 "run_budget": cfg.run_budget_usd, "global_spend": spend, "global_cap": cfg.budget_usd,
                 "llm_calls": int(u.get("calls", 0) or 0), "tokens": int(u.get("tokens", 0) or 0),
                 "steps": run.steps, "active": dict(run.agent_states)})
@@ -329,7 +333,7 @@ def _persist(cfg: Config, run: Run) -> None:
         if run.result is not None:
             (d / "result.json").write_text(json.dumps(run.result, indent=2, ensure_ascii=False, default=str),
                                            encoding="utf-8")
-        events = [e for e in run.events if e["kind"] != "screenshot"]
+        events = [e for e in run.events if e["kind"] not in ("screenshot", "metrics")]
         (d / "events.json").write_text(json.dumps(
             {"run_id": run.id, "task": run.req.task, "events": events, "result": run.result, "error": run.error},
             ensure_ascii=False, default=str), encoding="utf-8")
@@ -350,13 +354,14 @@ async def _execute(run: Run, cfg: Config) -> None:
         # planner/worker call this synchronously from the event loop thread
         loop.create_task(_push(run, kind, data))
 
-    async def on_ask(question: str, options: list, agent: str = "planner") -> str:
+    async def on_ask(question: str, options: list, agent: str = "planner", meta: Optional[dict] = None) -> str:
         ask_id = secrets.token_hex(4)
         fut: asyncio.Future = loop.create_future()
         run.pending[ask_id] = fut
         await _push(run, "ask_id", {"ask_id": ask_id, "question": question, "options": options,
                                     "timeout_s": cfg.ask_timeout_s, "agent": agent,
-                                    "kind": "approval" if str(question).startswith("Approve:") else "question"})
+                                    "kind": "approval" if (meta or {}).get("kind") == "approval" or str(question).startswith("Approve:") else "question",
+                                    "meta": meta or {}})
         try:
             return await fut
         finally:

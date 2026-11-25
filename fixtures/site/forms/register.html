@@ -16,6 +16,12 @@
 <div id="errors" class="errors" role="alert"></div>
 <div id="thanks" hidden></div>
 <script>
+const EMAIL_OK = v => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v);
+const showEmailError = () => {          // flagged on entry, like real sites, so an agent can react before submitting
+  const f = document.getElementById('reg');
+  document.getElementById('errors').textContent = f.email.value && !EMAIL_OK(f.email.value) ? 'Enter a valid email' : '';
+};
+['input', 'change', 'blur'].forEach(ev => document.getElementById('email').addEventListener(ev, showEmailError));
 document.getElementById('reg').addEventListener('submit', e => {
   e.preventDefault();
   const f = e.target, errs = [];

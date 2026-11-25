@@ -162,3 +162,14 @@ async def test_domain_without_dot_is_rejected_with_a_visible_error(br, base_url)
     assert "Thanks" not in text
     obs = await br.observe()
     assert any("valid email" in e for e in obs.errors)
+
+
+async def test_email_error_appears_as_soon_as_it_is_typed(br, base_url):
+    """Like real sites: a bad email is flagged on entry, so the agent can ask BEFORE it requests approval to submit."""
+    await br.act("goto", url=base_url + "/forms/register.html")
+    await br.observe()
+    await br.act("fill_form", fields={"Full name": "Maya Rao", "Email": "maya@school"})
+    obs = await br.observe()
+    assert any("valid email" in e for e in obs.errors), obs.errors
+    await br.act("fill_form", fields={"Email": "maya@school.org"})
+    assert not any("valid email" in e for e in (await br.observe()).errors)
