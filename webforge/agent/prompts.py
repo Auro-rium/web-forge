@@ -23,7 +23,8 @@ Tools:
 How to work:
 1. Multi-step task: write_todos first.
 2. Independent pieces (N sites, N items, N questions): do them in ONE parallel call (parallel_browse, read_urls, several web_search queries).
-3. Forms and site actions: delegate_browse with a subtask that states exactly what to fill in, including the values. Submitting, sending, logging in or deleting needs the user's approval: the sub-agent asks automatically, do not ask first yourself. If a report says the user did not approve an action, NEVER retry it or re-delegate it: report it as not done. Payments are never possible.
+3. A LIST of items to process on a site (e.g. register 4 students): ONE parallel_browse call with one subtask per item, each containing all of that item's values and the start_url, and telling the sub-agent to ask_user if a value is rejected and cannot be derived. Afterwards analyze(save_as="<name>.csv") over the results to produce a summary table deliverable (columns relevant to the task, e.g. name,email,ticket,confirmation code).
+3b. Forms and site actions: delegate_browse with a subtask that states exactly what to fill in, including the values. Submitting, sending, logging in or deleting needs the user's approval: the sub-agent asks automatically, do not ask first yourself. If a report says the user did not approve an action, NEVER retry it or re-delegate it: report it as not done. Payments are never possible.
 4. Credentials: never invent or ask for passwords in chat. If SECRETS are listed, tell the sub-agent to type {{secret:NAME}}.
 5. Deliverables: when the task asks for a report, table, list or recommendation, save it under outputs/ (write_file or analyze(save_as=...)), e.g. outputs/report.md, outputs/comparison.csv.
 6. Be decisive within the time/cost budget. Never re-search facts you already have; when sources conflict, report both instead of searching again. If a site is blocked (captcha, login wall), try another source.
@@ -39,6 +40,7 @@ Rules:
 - Forms: use fill_form({label: value, ...}) to fill all fields in one step (labels as shown; idx also works), check(idx) for checkboxes/radios, select for dropdowns. Then read FORM ERRORS and fix them before submitting. Submit with click on the submit button.
 - Submitting, sending, logging in, deleting or typing a password requires the user's approval: just do the action; the system asks the user. If it is not approved, do not retry it; report that in done().
 - Secrets: type passwords only as {{secret:NAME}} for the names listed; never guess credentials. Payment and card details are never allowed.
+- ask_user(question, options): ONLY when a field value is rejected (see FORM ERRORS) or required and the correct value cannot be derived from the subtask. Never guess an email, phone number or ID; never give up silently. Then use the answer and continue.
 - Reading: read(offset) for long pages, tables(), links(filter), find(text), structured() for prices/dates/ratings, extract(css, fields) for repeated items.
 - Captcha, consent wall or bot check you cannot pass: call done(success=false) saying so.
 - Call done(success, summary, data) as soon as the subtask is complete. Put the result in `data` (confirmation text, extracted items, source URLs).
@@ -109,6 +111,8 @@ WORKER_TOOLS = [
     _fn("structured", "Return JSON-LD and meta data (prices, dates, ratings, authors) embedded in the page.", {}, []),
     _fn("extract", "Extract rows with a CSS selector; fields maps name -> 'sel', 'sel@attr' or '@attr'.",
         {"css": {"type": "string"}, "fields": {"type": "object"}}, ["css"]),
+    _fn("ask_user", "Ask the human for a value you cannot derive (e.g. a rejected email). Returns their answer.",
+        {"question": {"type": "string"}, "options": {"type": "array", "items": {"type": "string"}}}, ["question"]),
     _fn("done", "Finish the subtask and report.",
         {"success": {"type": "boolean"}, "summary": {"type": "string"}, "data": {}}, ["success", "summary"]),
 ]

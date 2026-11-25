@@ -36,8 +36,12 @@ class Config:
     ask_timeout_s: float = float(os.getenv("WEBFORGE_ASK_TIMEOUT", "90"))
     verify_rounds: int = int(os.getenv("WEBFORGE_VERIFY_ROUNDS", "2"))
     screenshots: bool = os.getenv("WEBFORGE_SCREENSHOTS", "1") != "0"
+    # drive a Chrome the user is running (python -m webforge chrome prints this URL); empty = launch our own Chromium
+    cdp_url: str = field(default_factory=lambda: os.getenv("WEBFORGE_CDP_URL", "").strip())
+    keep_tabs: bool = os.getenv("WEBFORGE_KEEP_TABS", "0") == "1"           # leave the agent's tabs open after a run
+    allow_auto_real: bool = os.getenv("WEBFORGE_ALLOW_AUTO_REAL_BROWSER", "0") == "1"
     # parallel sub-agents / tabs per tool call (parallel_browse, read_urls, web_search queries)
-    max_parallel: int = int(os.getenv("WEBFORGE_PARALLEL", "4"))
+    max_parallel: int = int(os.getenv("WEBFORGE_PARALLEL", "5"))
     # characters of page text shown to the worker per observation (read() pages through the rest)
     obs_text_chars: int = int(os.getenv("WEBFORGE_OBS_TEXT", "4000"))
     chromium_path: str = field(default_factory=lambda: os.getenv(

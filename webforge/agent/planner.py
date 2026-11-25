@@ -27,7 +27,7 @@ ANALYZE_MAX_CHARS = 60000
 RESEARCH_TOOLS = {"web_search", "read_urls", "delegate_browse", "parallel_browse"}
 NO_ANSWER = "No answer from the user. Proceed with your best judgment and state the assumption you made."
 
-AskFn = Callable[[str, list], Awaitable[Optional[str]]]
+AskFn = Callable[..., Awaitable[Optional[str]]]   # ask(question, options, agent='planner')
 
 
 def _clip(s: Any, n: int = MAX_OUT) -> str:
@@ -35,12 +35,12 @@ def _clip(s: Any, n: int = MAX_OUT) -> str:
     return s if len(s) <= n else s[:n] + f"...[truncated {len(s) - n} chars]"
 
 
-async def ask_with_timeout(on_ask: Optional[AskFn], question: str, options: list, timeout: float) -> str:
+async def ask_with_timeout(on_ask: Optional[AskFn], question: str, options: list, timeout: float, agent: str = "planner") -> str:
     """Ask the human; no callback, timeout, error or empty reply all become NO_ANSWER."""
     if on_ask is None:
         return NO_ANSWER
     try:
-        ans = await asyncio.wait_for(on_ask(question, options), timeout=timeout)
+        ans = await asyncio.wait_for(on_ask(question, options, agent), timeout=timeout)
     except Exception:
         return NO_ANSWER
     return (ans or "").strip() or NO_ANSWER
@@ -140,18 +140,29 @@ async def run_task(task: str, *, llm, browser, cfg, on_event: Optional[Callable]
 
     async def ask_human(question: str, options: list, agent: str = "planner") -> str:
         emit("ask", {"question": question, "options": options, "agent": agent})
-        ans = await ask_with_timeout(on_ask, question, options, float(cfg.ask_timeout_s))
+        ans = await ask_with_timeout(on_ask, question, options, float(cfg.ask_timeout_s), agent)
         emit("answer", {"answer": ans, "agent": agent})
         digest.append(f"asked user: {question[:160]} -> {ans[:120]}")
         return ans
 
     # ----------------------------------------------------------- browsing --
     async def _browse(subtask: str, start_url, tab, agent: str) -> WorkerResult:
-        async def worker_ask(question: str, options: list) -> str:
-            return await ask_human(question, options, agent)
-
-        wr = await run_worker(subtask, start_url, llm=llm, browser=tab, cfg=cfg, on_event=tagged(agent),
-                              ask=worker_ask)
+        ident = getattr(tab, "identify", None)
+        if ident:
+            try:
+                ident(agent)
+            except Exception:
+                pass
+        ev = tagged(agent)
+        ev("agent_state", {"state": "running", "subtask": subtask[:200]})
+        try:
+            wr = await run_worker(subtask, start_url, llm=llm, browser=tab, cfg=cfg, on_event=ev,
+                                  ask=ask_human, agent=agent)
+        except Exception:
+            ev("agent_state", {"state": "failed", "steps": 0, "last": "worker crashed"})
+            raise
+        ev("agent_state", {"state": "done" if wr.success else "failed", "steps": wr.steps,
+                           "last": wr.summary[:100]})
         stats["steps"] += wr.steps
         digest.append(f"[{agent}] '{subtask[:120]}' -> {'ok' if wr.success else 'FAILED'} in {wr.steps} steps: "
                       f"{wr.summary[:200]}")
@@ -228,6 +239,8 @@ async def run_task(task: str, *, llm, browser, cfg, on_event: Optional[Callable]
             async with sem:
                 tab = await browser.new_tab()
                 try:
+                    if hasattr(tab, "identify"):
+                        tab.identify("read")
                     g = await tab.act("goto", url=url)
                     if not g.ok:
                         return f"## {url}\nFAILED to open: {g.message}"

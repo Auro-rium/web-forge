@@ -40,7 +40,7 @@ WebForge is an autonomous computer-use agent built as a deep agent: a planner th
 | `ask_user(question, options)` | asks the human; only for real ambiguity or missing personal data | - |
 | `final_answer(answer)` | goes through the verifier before the run may end | - |
 
-Concurrency is capped by `WEBFORGE_PARALLEL` (default 4) with an `asyncio.Semaphore`. Worker events carry an `agent` id (`w1`, `w2`, …) shown as colour lanes in both UIs.
+Concurrency is capped by `WEBFORGE_PARALLEL` (default 5) with an `asyncio.Semaphore`. Worker events carry an `agent` id (`w1`, `w2`, …) shown as colour lanes in both UIs.
 
 ### Worker tools
 

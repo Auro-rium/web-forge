@@ -21,6 +21,8 @@ def _build_parser() -> argparse.ArgumentParser:
         r.add_argument("--plain", action="store_true", help="plain line output instead of the live view")
         r.add_argument("--approval", choices=["ask", "auto", "deny"], default=None,
                        help="consequential actions (submit/send/login/delete): ask (default), auto, deny")
+        r.add_argument("--cdp", metavar="URL", default=None,
+                       help="drive your own Chrome via remote debugging (sets WEBFORGE_CDP_URL)")
         r.add_argument("--secret", action="append", default=[], metavar="NAME=env:VAR",
                        help="make a secret available as {{secret:NAME}}, read from environment variable VAR")
 
@@ -35,7 +37,13 @@ def _build_parser() -> argparse.ArgumentParser:
     w = sub.add_parser("serve", help="web UI + API server")
     w.add_argument("--port", type=int, default=None, help="default: $PORT or 8000")
     w.add_argument("--host", default="127.0.0.1")
+    w.add_argument("--cdp", metavar="URL", default=None, help="drive your own Chrome (sets WEBFORGE_CDP_URL)")
     w.add_argument("--headed", action="store_true", help="show the real browser window while the agent runs")
+
+    c = sub.add_parser("chrome", help="launch a Chrome with remote debugging for WebForge to drive")
+    c.add_argument("--port", type=int, default=None, help="default: 9222")
+    c.add_argument("--profile", default=None, help="dedicated profile directory")
+    c.add_argument("--stop-on-exit", action="store_true", help="close Chrome when this command exits")
 
     f = sub.add_parser("serve-fixtures", help="serve the offline test site (forms, data pages)")
     f.add_argument("--port", type=int, default=8765)
@@ -57,7 +65,7 @@ def _secrets(specs: list[str]):
 async def _cmd_run(args, task: str, run_dir: Path, resume: dict | None = None) -> int:
     from rich.console import Console
     from webforge.agent.planner import run_task
-    from webforge.browser.session import Browser
+    from webforge.browser.session import open_browser
     from webforge.config import Config
     from webforge.llm import make_llm
     from webforge.ui import LiveUI, PlainUI, render_result
@@ -67,12 +75,15 @@ async def _cmd_run(args, task: str, run_dir: Path, resume: dict | None = None) -
         cfg.approval = args.approval
     console = Console()
     llm = make_llm(cfg, mock=args.mock)
-    browser = Browser(chromium_path=cfg.chromium_path, allowed_domains=cfg.allowed_domains,
-                      secrets=_secrets(args.secret))
     run_dir.mkdir(parents=True, exist_ok=True)
     result = None
+    browser = None
     try:
-        await browser.start(headless=not args.headed)
+        try:
+            browser = await open_browser(cfg, _secrets(args.secret), headless=not args.headed)
+        except RuntimeError as e:
+            print(str(e), file=sys.stderr)
+            return 2
         ui = PlainUI(task, console) if args.plain else LiveUI(task, console)
         with ui:
             result = await run_task(task, llm=llm, browser=browser, cfg=cfg, on_event=ui.on_event,
@@ -82,12 +93,42 @@ async def _cmd_run(args, task: str, run_dir: Path, resume: dict | None = None) -
             json.dumps(dataclasses.asdict(result), indent=2, ensure_ascii=False, default=str), encoding="utf-8")
         console.print(f"Run saved to {run_dir}  (resume with: python -m webforge resume {run_dir.name})")
     finally:
-        for closer in (browser.close, getattr(llm, "aclose", None)):
+        for closer in (getattr(browser, "close", None), getattr(llm, "aclose", None)):
+            if closer is None:
+                continue
             try:
                 await closer()
             except Exception:
                 pass
     return 0 if result is not None and result.ok else 1
+
+
+def _cmd_chrome(args) -> int:
+    from webforge import chrome as ch
+    port = args.port or ch.DEFAULT_PORT
+    profile = Path(args.profile) if args.profile else ch.DEFAULT_PROFILE
+    try:
+        proc, cmd = ch.launch_chrome(port=port, profile=profile, headless=False)
+    except RuntimeError as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    url = f"http://127.0.0.1:{port}"
+    print(f"Chrome: {cmd[0]}")
+    print("Command: " + " ".join(cmd))
+    print("Point WebForge at it (same terminal, before run/serve):")
+    print(f"  export WEBFORGE_CDP_URL={url}")
+    print(f"  (Windows cmd:  set WEBFORGE_CDP_URL={url})")
+    print("Chrome is running. Press Ctrl-C to exit" + (" (Chrome will be closed)." if args.stop_on_exit
+                                                        else " (Chrome stays open)."))
+    try:
+        while proc.poll() is None:
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if args.stop_on_exit:
+            ch.stop_chrome(proc)
+    return 0
 
 
 def _cmd_fixtures(args) -> int:
@@ -111,6 +152,10 @@ def main(argv=None) -> int:
     if not args.cmd:
         parser.print_help()
         return 0
+    if getattr(args, "cdp", None):
+        os.environ["WEBFORGE_CDP_URL"] = args.cdp
+    if args.cmd == "chrome":
+        return _cmd_chrome(args)
     if args.cmd == "run":
         from webforge.config import Config
         return asyncio.run(_cmd_run(args, args.task, Config().runs_dir / time.strftime("%Y%m%d_%H%M%S")))

@@ -109,14 +109,13 @@
     </div>
     <p class="task-line" id="live-task"></p>
 
-    <div class="card ask" id="ask-card" hidden role="alertdialog" aria-labelledby="ask-q">
-      <h3>WebForge needs you <span class="muted mono small" id="ask-timer"></span></h3>
-      <p id="ask-q" class="ask-q"></p>
-      <div class="row wrap-r" id="ask-options"></div>
-      <div class="row">
-        <input id="ask-text" class="grow" autocomplete="off" placeholder="or type an answer">
-        <button class="btn primary" id="btn-ask-send" type="button">Send</button>
-      </div>
+    <div id="asks" class="asks" aria-live="polite"></div>
+
+    <div class="card mission" id="mission">
+      <h3>Mission control <span class="muted small">(one tile per sub-agent)</span></h3>
+      <p class="ctl-line small" id="ctl-line" hidden></p>
+      <p class="ctl-note small" id="ctl-note" hidden>These tabs are open in your Chrome window.</p>
+      <div id="tiles" class="tiles"><span class="muted small" id="tiles-empty">no sub-agents yet</span></div>
     </div>
 
     <div class="live-grid">
@@ -125,10 +124,6 @@
           <h3>Plan</h3>
           <ul id="todos" class="todos"><li class="muted">waiting for the plan...</li></ul>
         </div>
-        <div class="card">
-          <h3>Browser <span class="muted small">(live view of each sub-agent)</span></h3>
-          <div id="shots" class="shots"><span class="muted small">no browser activity yet</span></div>
-        </div>
       </div>
       <div class="col">
         <div class="card">
@@ -136,6 +131,34 @@
           <ol id="timeline" class="timeline" aria-live="polite"></ol>
         </div>
       </div>
+    </div>
+
+    <div class="card monitor" id="monitor">
+      <h3>Monitor</h3>
+      <div class="gauges" id="gauges"></div>
+      <div class="mon-sub">
+        <div class="agent-wrap">
+          <h4 class="mon-h">Agents</h4>
+          <div class="tbl-scroll"><table class="agent-tbl" id="agent-tbl">
+            <thead><tr><th>agent</th><th>subtask</th><th>state</th><th>steps</th><th>last action</th><th>idle</th></tr></thead>
+            <tbody id="agent-rows"></tbody>
+          </table></div>
+        </div>
+        <div class="spark-wrap">
+          <h4 class="mon-h">Events / second <span class="muted mono small" id="spark-now"></span></h4>
+          <svg id="spark" class="spark" viewBox="0 0 200 40" preserveAspectRatio="none" role="img" aria-label="events per second, last 40 seconds"><polyline id="spark-line" points="" fill="none"/></svg>
+        </div>
+      </div>
+      <h4 class="mon-h">Live log</h4>
+      <div class="logbar row wrap-r">
+        <label class="inline">level <select id="lf-level"><option value="">all</option><option>info</option><option>action</option><option>ask</option><option>warn</option><option>error</option></select></label>
+        <label class="inline">agent <select id="lf-agent"><option value="">all</option></select></label>
+        <input id="lf-text" class="grow" type="search" autocomplete="off" placeholder="search log" aria-label="search log">
+        <button class="btn small" id="lf-pause" type="button">Pause scroll</button>
+        <button class="btn small" id="lf-copy" type="button">Copy</button>
+        <a class="btn small" id="lf-dl" href="#" download>Download .jsonl</a>
+      </div>
+      <div class="loglines" id="loglines" role="log" tabindex="0" aria-label="structured log"></div>
     </div>
     <div class="card answer" id="answer-card" hidden>
       <h3>Result <span class="badge" id="answer-badge"></span> <span class="badge" id="verify-badge" hidden></span></h3>

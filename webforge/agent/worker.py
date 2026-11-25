@@ -20,6 +20,7 @@ ACTIONS = {"goto", "click", "type", "select", "check", "fill_form", "press", "sc
 DATA_ACTIONS = {"extract"}   # the other readers already put their data in the message
 PAGE_CHANGING = {"goto", "click", "type", "select", "check", "fill_form", "press", "back"}
 SCREENSHOT_EVERY_S = 1.5
+NO_USER = "No user is available to answer. Proceed with your best judgment and state the assumption."
 
 
 @dataclass
@@ -66,7 +67,7 @@ def _approved(answer: str) -> bool:
 
 async def run_worker(subtask: str, start_url: Optional[str] = None, *, llm, browser, cfg,
                      on_event: Optional[Callable] = None,
-                     ask: Optional[Callable[[str, list], Awaitable[str]]] = None) -> WorkerResult:
+                     ask: Optional[Callable[..., Awaitable[str]]] = None, agent: str = "planner") -> WorkerResult:
     trace_start = len(browser.trace)
     steps = 0
     allowed = getattr(cfg, "allowed_domains", None)
@@ -78,6 +79,7 @@ async def run_worker(subtask: str, start_url: Optional[str] = None, *, llm, brow
     elements: list = []
     last_shot = [0.0]
     denied: list[str] = []
+    agent_id = [agent]
 
     def redact(text: str) -> str:
         return secrets.redact(text) if secrets is not None else text
@@ -98,6 +100,25 @@ async def run_worker(subtask: str, start_url: Optional[str] = None, *, llm, brow
         if img and len(img) < 120_000:
             _emit(on_event, "screenshot", {"jpeg_b64": base64.b64encode(img).decode(), "url": _url(browser)})
 
+    async def ask_human(question: str, options: list, last: str) -> str:
+        """Ask the human with the tab flagged for attention and agent_state waiting/running around it."""
+        att = getattr(browser, "attention", None)
+        _emit(on_event, "agent_state", {"state": "waiting", "last": last})
+        if att:
+            try:
+                await att(True)
+            except Exception:
+                pass
+        try:
+            return await ask(question, options, agent_id[0]) or ""
+        finally:
+            if att:
+                try:
+                    await att(False)
+                except Exception:
+                    pass
+            _emit(on_event, "agent_state", {"state": "running", "last": "answer received"})
+
     async def gate(name: str, args: dict) -> Optional[str]:
         """None if the action may run, else the error text for the model."""
         verdict, reason = check_action(name, args, elements, allowed)
@@ -115,7 +136,8 @@ async def run_worker(subtask: str, start_url: Optional[str] = None, *, llm, brow
         await screenshot(force=True)
         fields = args.get("fields") or {e.name or f"[{e.idx}]": e.value for e in elements
                                          if e.tag in ("input", "select", "textarea") and e.value}
-        answer = await ask(approval_question(reason, _url(browser), redact_fields(fields)), ["approve", "deny"])
+        answer = await ask_human(approval_question(reason, _url(browser), redact_fields(fields)),
+                                 ["approve", "deny"], f"waiting for approval: {reason}"[:120])
         if _approved(answer):
             return None
         _emit(on_event, "action", {"action": name, "args": args, "ok": False, "message": "DENIED by user: " + reason})
@@ -184,7 +206,17 @@ async def run_worker(subtask: str, start_url: Optional[str] = None, *, llm, brow
                 if isinstance(succ, str):
                     succ = succ.strip().lower() not in ("false", "0", "no")
                 return result(bool(succ), redact(str(a.get("summary", "")))[:2000], a.get("data"))
-            if tc.name not in ACTIONS:
+            if tc.name == "ask_user":
+                a = tc.args or {}
+                q = str(a.get("question", "")).strip()
+                if not q:
+                    out = "ERROR: question is required"
+                elif ask is None:
+                    out = NO_USER
+                else:
+                    opts = [str(o) for o in (a.get("options") or [])][:6]
+                    out = "USER ANSWER: " + redact(await ask_human(q, opts, "asked the user: " + q[:100]))
+            elif tc.name not in ACTIONS:
                 out = f"ERROR: unknown tool '{tc.name}'"
             elif steps >= max_steps:
                 return result(False, "step budget exhausted")

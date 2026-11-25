@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 from playwright.async_api import async_playwright
 
@@ -17,6 +18,39 @@ from webforge.browser.actions import (FIND_JS, LINKS_JS, READ_JS, STRUCTURED_JS,
                                       normalize_url, preview, short_err)
 from webforge.safety import Secrets, domain_allowed
 from webforge.browser.observe import observe_page, page_text as _page_text
+
+BADGE_JS = r"""
+([label, text, waiting]) => {
+  const colors = { w1: '#8fb8ff', w2: '#e0b26b', w3: '#9fd8a5', w4: '#d99bd6', w5: '#79d1d1' };
+  let b = document.getElementById('wf-badge');
+  if (!b) { b = document.createElement('div'); b.id = 'wf-badge'; document.documentElement.appendChild(b); }
+  const c = waiting ? '#ffb454' : (colors[label] || '#8ea6ff');
+  b.style.cssText = 'position:fixed;z-index:2147483647;right:12px;bottom:12px;max-width:60vw;padding:6px 10px;' +
+    'border-radius:6px;font:600 12px/1.3 ui-monospace,Menlo,Consolas,monospace;color:#0a0b0e;background:' + c +
+    ';box-shadow:0 4px 18px rgba(0,0,0,.45);pointer-events:none;opacity:.95;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+  b.textContent = 'WebForge · ' + (label || 'agent') + ' · ' + text;
+  const base = document.title.replace(/^\[(w\d+|agent|read)\] /, '');
+  document.title = '[' + (label || 'agent') + '] ' + base;
+}
+"""
+
+CLEAR_MARKS_JS = r"""
+() => {
+  const b = document.getElementById('wf-badge'); if (b) b.remove();
+  document.title = document.title.replace(/^\[(w\d+|agent|read)\] /, '');
+  document.querySelectorAll('[data-wf-hl]').forEach(e => { e.style.outline = e.__wfo || ''; e.removeAttribute('data-wf-hl'); });
+}
+"""
+
+HIGHLIGHT_JS = r"""
+e => { e.setAttribute('data-wf-hl', '1'); e.__wfo = e.style.outline; e.style.outline = '3px solid #ffb454';
+       e.style.outlineOffset = '2px'; e.scrollIntoView({ block: 'center', inline: 'center' }); }
+"""
+
+UNHIGHLIGHT_JS = r"""
+e => { e.style.outline = e.__wfo || ''; e.style.outlineOffset = ''; e.removeAttribute('data-wf-hl'); }
+"""
+
 
 def _truthy(v: Any) -> bool:
     if isinstance(v, str):
@@ -39,9 +73,14 @@ class Browser:
         self._pw = self._browser = self._ctx = None
         self._tab: Optional["Tab"] = None
         self._tabs: list["Tab"] = []
+        self.external = False        # attached to a Chrome the user is running (CDP), not launched by us
+        self.keep_tabs = False       # external mode: leave the agent's tabs open after the run (marks removed)
+        self.mark: Optional[bool] = None   # badge/highlight on controlled pages; default: on when a human can see them
+        self._visible = False        # a human is watching the real window: pause briefly so actions are visible
 
     # ------------------------------------------------------------ lifecycle ---
     async def start(self, headless: bool = True) -> None:
+        self._visible = not headless
         self._pw = await async_playwright().start()
         self._browser = await self._pw.chromium.launch(
             executable_path=self.chromium_path or None, headless=headless, args=["--no-sandbox"])
@@ -49,13 +88,36 @@ class Browser:
         self._ctx.set_default_timeout(8000)
         self._tab = await self.new_tab()
 
+    async def connect(self, cdp_url: str) -> None:
+        """Attach to a running Chrome (started with --remote-debugging-port). Only NEW tabs are ever used."""
+        self._pw = await async_playwright().start()
+        self._browser = await self._pw.chromium.connect_over_cdp(cdp_url)
+        self._ctx = self._browser.contexts[0] if self._browser.contexts else await self._browser.new_context()
+        self._ctx.set_default_timeout(8000)
+        self.external, self._visible = True, True
+        self._tab = await self.new_tab()
+
     async def new_tab(self) -> "Tab":
         """An independent tab (own page + trace) in the same browser context."""
-        tab = Tab(await self._ctx.new_page(), self.allowed_domains, self.secrets)
+        mark = self.mark if self.mark is not None else (self.external or self._visible)
+        tab = Tab(await self._ctx.new_page(), self.allowed_domains, self.secrets, mark=mark, visible=self._visible)
         self._tabs.append(tab)
         return tab
 
     async def close(self) -> None:
+        if self.external:
+            # the user's Chrome keeps running and the user's own tabs are never touched
+            for t in list(self._tabs):
+                await (t.clear_marks() if self.keep_tabs else t.close())
+            for obj, meth in ((self._browser, "close"), (self._pw, "stop")):
+                try:
+                    if obj:
+                        await getattr(obj, meth)()
+                except Exception:
+                    pass
+            self._ctx = self._browser = self._pw = None
+            self._tab, self._tabs = None, []
+            return
         for obj, meth in ((self._ctx, "close"), (self._browser, "close"), (self._pw, "stop")):
             try:
                 if obj:
@@ -83,23 +145,99 @@ class Browser:
 
 
 class Tab:
-    def __init__(self, page, allowed_domains: Optional[list[str]] = None, secrets: Optional[Secrets] = None):
+    def __init__(self, page, allowed_domains: Optional[list[str]] = None, secrets: Optional[Secrets] = None,
+                 mark: bool = False, visible: bool = False):
         self.page = page
         self.allowed_domains = allowed_domains
         self.secrets = secrets or Secrets(env=False)
         self.trace: list[TraceStep] = []
+        self.label = ""              # agent id shown on the page badge and tab title ("w2")
+        self.status = "ready"
+        self.mark = mark             # draw the badge / outline on the page
+        self.visible = visible       # a human watches this window: slow down just enough to be seen
+        self._waiting = False
+        self._owned = [page]         # every page this tab opened (a click may open popups); closed with the tab
         self._last_obs: Optional[Observation] = None
         self._new_page = None
         page.on("popup", lambda p: setattr(self, "_new_page", p))
 
+    def identify(self, label: str) -> None:
+        self.label = label
+
     async def new_tab(self) -> "Tab":
-        return Tab(await self.page.context.new_page(), self.allowed_domains, self.secrets)
+        return Tab(await self.page.context.new_page(), self.allowed_domains, self.secrets, self.mark, self.visible)
 
     async def close(self) -> None:
+        for pg in self._owned:
+            try:
+                await pg.close()
+            except Exception:
+                pass
+
+    # -------------------------------------------- visible control marks ---
+    def _describe(self, action: str, a: dict) -> str:
+        name = ""
+        if "idx" in a and self._last_obs:
+            name = next((e.name for e in self._last_obs.elements if e.idx == a["idx"]), "")
+        if action == "goto":
+            return "opening " + (urlparse(normalize_url(str(a.get("url", "")))).hostname or "page")
+        if action == "click":
+            return f"clicking '{name[:30]}'" if name else "clicking"
+        if action == "type":
+            return f"typing in '{name[:30]}'" if name else "typing"
+        if action == "fill_form":
+            return "filling the form"
+        if action in ("select", "check"):
+            return f"setting '{name[:30]}'" if name else "setting a field"
+        if action in ("read", "tables", "links", "find", "structured", "extract"):
+            return "reading the page"
+        return action
+
+    async def _mark(self, text: Optional[str] = None) -> None:
+        if not self.mark:
+            return
+        if text is not None:
+            self.status = text
         try:
-            await self.page.close()
+            await self.page.evaluate(BADGE_JS, [self.label, "waiting for you" if self._waiting else self.status,
+                                                 self._waiting])
+        except Exception:
+            pass   # error pages, closed tabs: the badge is decoration
+
+    async def attention(self, waiting: bool) -> None:
+        """The agent needs the human: bring this tab to the front and turn its badge amber."""
+        self._waiting = waiting
+        if self.mark:
+            if waiting and self.visible:
+                try:
+                    await self.page.bring_to_front()
+                except Exception:
+                    pass
+            await self._mark()
+
+    async def clear_marks(self) -> None:
+        for pg in self._owned:
+            try:
+                await pg.evaluate(CLEAR_MARKS_JS)
+            except Exception:
+                pass
+
+    async def _highlight(self, el) -> None:
+        if not self.mark:
+            return
+        try:
+            await el.evaluate(HIGHLIGHT_JS)
+            if self.visible:
+                await asyncio.sleep(0.35)   # long enough for a person to see where the agent is working
         except Exception:
             pass
+
+    @staticmethod
+    async def _unhighlight(el) -> None:
+        try:
+            await el.evaluate(UNHIGHLIGHT_JS)
+        except Exception:
+            pass   # the click navigated away: the element is gone
 
     # ------------------------------------------------------------- observe ---
     async def observe(self) -> Observation:
@@ -113,6 +251,7 @@ class Tab:
     async def _settle(self) -> None:
         if self._new_page is not None:
             self.page, self._new_page = self._new_page, None
+            self._owned.append(self.page)
             self.page.on("popup", lambda p: setattr(self, "_new_page", p))
         try:
             await self.page.wait_for_load_state("domcontentloaded", timeout=5000)
@@ -130,10 +269,12 @@ class Tab:
     async def act(self, action: str, **args: Any) -> ActionResult:
         url_before = self.page.url if self.page else ""
         locator = self._locator_for_idx(args.get("idx")) if "idx" in args else None
+        await self._mark(self._describe(action, args))
         try:
             res = await self._do(action, args)
         except Exception as e:  # never raise from act()
             res = ActionResult(False, short_err(e))
+        await self._mark()   # navigation replaces the document: put the badge and title prefix back
         res.message = self.secrets.redact(res.message)
         self.trace.append(TraceStep(action=action, args=dict(args), locator=locator, url=url_before,
                                     ok=res.ok, result=res.message[:300]))
@@ -193,6 +334,13 @@ class Tab:
         return ActionResult(True, f"navigated to {self.page.url}")
 
     async def _element_action(self, action: str, el, value: Optional[str], submit: bool) -> ActionResult:
+        await self._highlight(el)
+        try:
+            return await self._element_action_inner(action, el, value, submit)
+        finally:
+            await self._unhighlight(el)
+
+    async def _element_action_inner(self, action: str, el, value: Optional[str], submit: bool) -> ActionResult:
         if action == "click":
             await el.click()
             await self._settle()
@@ -223,8 +371,12 @@ class Tab:
 
     async def _set_checked(self, el, on: Any) -> ActionResult:
         on = _truthy(on)
-        await el.set_checked(on)
-        await self._touch(el)
+        await self._highlight(el)
+        try:
+            await el.set_checked(on)
+            await self._touch(el)
+        finally:
+            await self._unhighlight(el)
         return ActionResult(True, ("checked" if on else "unchecked"))
 
     def _match_field(self, key: Any):
@@ -364,3 +516,19 @@ class Tab:
         if not d.get("jsonld") and not d.get("meta"):
             return ActionResult(False, "no structured data (JSON-LD/meta) on this page", d)
         return ActionResult(True, json.dumps(d, ensure_ascii=False, default=str)[:3000], d)
+
+
+async def open_browser(cfg, secrets: Optional[Secrets] = None, headless: bool = True) -> Browser:
+    """The browser the agent will use: the user's own Chrome when WEBFORGE_CDP_URL is set, else a launched Chromium."""
+    b = Browser(chromium_path=cfg.chromium_path, allowed_domains=cfg.allowed_domains, secrets=secrets)
+    b.mark = True
+    if cfg.cdp_url:
+        if cfg.approval == "auto" and not cfg.allow_auto_real:
+            raise RuntimeError("WEBFORGE_APPROVAL=auto is refused while controlling your own Chrome: submitting and "
+                               "logging in would run without asking. Use ask (default), or set "
+                               "WEBFORGE_ALLOW_AUTO_REAL_BROWSER=1 if you really mean it.")
+        b.keep_tabs = cfg.keep_tabs
+        await b.connect(cfg.cdp_url)
+    else:
+        await b.start(headless=headless)
+    return b

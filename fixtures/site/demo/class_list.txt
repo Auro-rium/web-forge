@@ -1,0 +1,7 @@
+Hi! Please register these four students for Friday's science fair on
+http://127.0.0.1:8765/forms/register.html  (all of them: student tickets, morning session, they all accept the terms):
+
+- Ada Lovelace, ada.lovelace@school.org
+- Alan Turing - alan.turing@school.org
+- maya rao, maya@school            <- not sure this one is right
+- Grace Hopper (grace.hopper@school.org)

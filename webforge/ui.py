@@ -102,6 +102,7 @@ class PlainUI:
         self.task = task
         self.console = console or Console()
         self.t0 = time.time()
+        self._last_metrics = 0.0
 
     def __enter__(self):
         return self
@@ -109,11 +110,14 @@ class PlainUI:
     def __exit__(self, *a):
         return False
 
-    async def ask(self, question: str, options: list) -> str:
+    async def ask(self, question: str, options: list, agent: str = "planner") -> str:
         return await _prompt(self.console, question, options)
 
     def on_event(self, kind: str, data: dict) -> None:
         if kind == "screenshot":
+            return
+        if kind == "metrics":
+            self._metrics_line(data or {})
             return
         try:
             if kind == "todos":
@@ -123,6 +127,21 @@ class PlainUI:
                 return
             self.console.print(f"[{time.time() - self.t0:6.1f}s] {kind:<12} {describe_event(kind, data)}",
                                markup=False, highlight=False)
+        except Exception:
+            pass
+
+
+    def _metrics_line(self, d: dict) -> None:
+        now = time.monotonic()
+        if self._last_metrics and now - self._last_metrics < 5.0:
+            return
+        self._last_metrics = now
+        try:
+            self.console.print(
+                f"[{time.time() - self.t0:6.1f}s] metrics      {float(d.get('elapsed', 0)):.0f}s, "
+                f"{d.get('steps', 0)} steps, {d.get('llm_calls', 0)} calls, {d.get('tokens', 0):,} tokens, "
+                f"${float(d.get('run_cost', 0)):.4f}/${float(d.get('run_budget', 0)):.2f}",
+                markup=False, highlight=False)
         except Exception:
             pass
 
@@ -162,7 +181,7 @@ class LiveUI:
         return False
 
     # -- human in the loop: pause the live view while asking
-    async def ask(self, question: str, options: list) -> str:
+    async def ask(self, question: str, options: list, agent: str = "planner") -> str:
         live = self._live
         if live is not None:
             live.stop()
@@ -175,7 +194,7 @@ class LiveUI:
     # -- events
     def on_event(self, kind: str, data: dict) -> None:
         data = data or {}
-        if kind == "screenshot":
+        if kind in ("screenshot", "metrics"):
             return
         try:
             if kind == "todos":

@@ -16,6 +16,9 @@ services:
       WEBFORGE_PROVIDER: ${WEBFORGE_PROVIDER:-anthropic}
       WEBFORGE_MODEL: ${WEBFORGE_MODEL:-claude-haiku-5-5}
       WEBFORGE_BUDGET_USD: ${WEBFORGE_BUDGET_USD:-3.0}
+    # Opt-in: drive your own Chrome on the host (the simpler path for the live-browser demo is running on the host).
+    # extra_hosts: ["host.docker.internal:host-gateway"]
+    # and add under environment:  WEBFORGE_CDP_URL: http://host.docker.internal:9222
     volumes:
       - webforge-data:/app/data        # spend ledger, saved Backboard key
       - webforge-runs:/app/runs        # runs: events, checkpoints (resume), deliverables

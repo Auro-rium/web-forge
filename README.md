@@ -80,6 +80,22 @@ python -m webforge run "<task>" --mock              # offline smoke test with th
 
 In the terminal, questions and approvals pause the live view and wait for your answer (`approve` / `deny` or free text).
 
+## Let it drive your own Chrome (recommended for demos)
+
+By default WebForge runs its own Chromium. To make the agents work **in a Chrome window you can see and use**, start one with remote debugging and point WebForge at it:
+
+```bash
+python -m webforge chrome                     # opens Chrome with a dedicated "webforge" profile; prints the next line
+export WEBFORGE_CDP_URL=http://127.0.0.1:9222 # Windows: set WEBFORGE_CDP_URL=http://127.0.0.1:9222
+python -m webforge serve                      # or: python -m webforge run "<task>"
+```
+
+- Every sub-agent works in its **own new tab** in that window. Controlled pages carry a coloured badge ("WebForge · w2 · typing email…"), the tab title is prefixed `[w2]`, and the field being acted on is outlined. When an agent needs you, its tab jumps to the front and the badge turns amber.
+- Your own tabs are **never touched**; when the run ends only the agent's tabs are closed (`WEBFORGE_KEEP_TABS=1` keeps them for you to inspect).
+- The `chrome` command uses a **dedicated profile** (`~/.webforge/chrome-profile`), because recent Chrome refuses remote debugging on your everyday profile, and because it keeps the agent away from your normal logins. Log in once, in that window, to any site you want it to use; the session persists.
+- The safety gate is unchanged and `WEBFORGE_APPROVAL=auto` is refused in this mode unless you set `WEBFORGE_ALLOW_AUTO_REAL_BROWSER=1`.
+- Docker cannot see a host Chrome by default; run on the host for this mode (an opt-in example is in `docker-compose.yml`). Troubleshooting: if `chrome` cannot find Chrome set `WEBFORGE_CHROME=/path/to/chrome`; if port 9222 is busy use `--port 9333` and adjust the URL.
+
 ## Safety model
 
 | Verdict | Actions | What happens |
@@ -101,9 +117,12 @@ In the terminal, questions and approvals pause the live view and wait for your a
 | `WEBFORGE_APPROVAL` | `ask` | `ask` \| `auto` \| `deny` for consequential actions |
 | `WEBFORGE_ASK_TIMEOUT` | `90` | seconds to wait for your answer |
 | `WEBFORGE_VERIFY_ROUNDS` | `2` | how often the verifier may send the planner back |
-| `WEBFORGE_PARALLEL` | `4` | concurrent sub-agents, tabs and searches |
+| `WEBFORGE_PARALLEL` | `5` | concurrent sub-agents, tabs and searches |
 | `WEBFORGE_SECRET_<NAME>` | (none) | secret values for `{{secret:name}}` |
-| `WEBFORGE_SCREENSHOTS` | `1` | live tab thumbnails in the web UI |
+| `WEBFORGE_SCREENSHOTS` | `1` | live tab thumbnails in the web UI (fallback view when the browser is not on your screen) |
+| `WEBFORGE_CDP_URL` | (none) | drive **your own Chrome** (see below); unset = launch a private Chromium |
+| `WEBFORGE_KEEP_TABS` | `0` | with your own Chrome: leave the agent's tabs open after the run |
+| `WEBFORGE_ALLOW_AUTO_REAL_BROWSER` | `0` | allow `WEBFORGE_APPROVAL=auto` while driving your own Chrome (refused otherwise) |
 | `WEBFORGE_ALLOWED_DOMAINS` | `*` (open web) | optional comma-separated navigation allowlist |
 | `WEBFORGE_WORKER_STEPS` / `WEBFORGE_PLANNER_STEPS` | `25` / `30` | safety caps per subtask / per run |
 | `WEBFORGE_OBS_TEXT` | `4000` | page-text characters per observation (`read(offset)` pages through the rest) |

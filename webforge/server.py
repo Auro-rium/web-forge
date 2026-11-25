@@ -200,6 +200,11 @@ class AnswerRequest(BaseModel):
     answer: str
 
 
+class AnswerAllRequest(BaseModel):
+    answer: str
+    ask_ids: list[str]
+
+
 class SecretRequest(BaseModel):
     name: str
     value: str
@@ -220,6 +225,8 @@ class Run:
         self.cond = asyncio.Condition()
         self.task: Optional[asyncio.Task] = None
         self.pending: dict[str, asyncio.Future] = {}   # ask_id -> future resolved by POST /answer
+        self.agent_states: dict[str, str] = {}         # agent id -> running|waiting|done|failed (from agent_state)
+        self.steps = 0                                  # count of "action" events so far
 
     def public(self) -> dict:
         return {"run_id": self.id, "status": self.status, "task": self.req.task, "resumed_from": self.parent,
@@ -253,6 +260,12 @@ async def _push(run: Run, kind: str, data: dict) -> None:
     data = json.loads(sec.redact(json.dumps(data, ensure_ascii=False)))
     run.seq += 1
     ev = {"n": run.seq, "t": round(time.time() - run.started, 2), "kind": kind, "data": data}
+    if kind == "action":
+        run.steps += 1
+    elif kind == "agent_state" and data.get("agent"):
+        run.agent_states[str(data["agent"])] = str(data.get("state", "running"))
+    if kind not in ("screenshot", "metrics"):
+        _append_log(run, ev)
     if kind == "screenshot":   # live-only: replace the previous frame of the same agent instead of piling up
         run.events = [e for e in run.events
                       if not (e["kind"] == "screenshot" and e["data"].get("agent") == data.get("agent"))]
@@ -261,6 +274,46 @@ async def _push(run: Run, kind: str, data: dict) -> None:
     run.events.append(ev)
     async with run.cond:
         run.cond.notify_all()
+
+
+def _append_log(run: Run, ev: dict) -> None:
+    """One JSON line per event in runs/<id>/log.jsonl (already redacted). IO errors are ignored."""
+    try:
+        d = Path(get_cfg().runs_dir) / run.id
+        d.mkdir(parents=True, exist_ok=True)
+        with open(d / "log.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(ev, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        pass
+
+
+async def _metrics_ticker(run: Run, cfg: Config, llm: Any, interval: float = 1.0) -> None:
+    """Push a `metrics` event every `interval` seconds until cancelled. Never raises (except cancellation)."""
+    def usage() -> dict:
+        try:
+            return llm.usage() or {}
+        except Exception:
+            return {}
+
+    base_cost = float(usage().get("cost_usd", 0) or 0)
+    while True:
+        try:
+            u = usage()
+            try:
+                spend = _spend(cfg)
+            except Exception:
+                spend = 0.0
+            await _push(run, "metrics", {
+                "elapsed": round(time.time() - run.started, 1), "deadline_s": cfg.run_deadline_s,
+                "run_cost": round(max(float(u.get("cost_usd", 0) or 0) - base_cost, 0.0), 6),
+                "run_budget": cfg.run_budget_usd, "global_spend": spend, "global_cap": cfg.budget_usd,
+                "llm_calls": int(u.get("calls", 0) or 0), "tokens": int(u.get("tokens", 0) or 0),
+                "steps": run.steps, "active": dict(run.agent_states)})
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+        await asyncio.sleep(interval)
 
 
 async def _finish(run: Run, status: str) -> None:
@@ -287,22 +340,23 @@ def _persist(cfg: Config, run: Run) -> None:
 async def _execute(run: Run, cfg: Config) -> None:
     """Build everything, run the agent, store the result. Replaced by a stub in tests."""
     from webforge.agent.planner import run_task
-    from webforge.browser.session import Browser
+    from webforge.browser.session import open_browser
     from webforge.llm import make_llm
 
-    llm = browser = None
+    llm = browser = ticker = None
     loop = asyncio.get_running_loop()
 
     def on_event(kind: str, data: dict) -> None:
         # planner/worker call this synchronously from the event loop thread
         loop.create_task(_push(run, kind, data))
 
-    async def on_ask(question: str, options: list) -> str:
+    async def on_ask(question: str, options: list, agent: str = "planner") -> str:
         ask_id = secrets.token_hex(4)
         fut: asyncio.Future = loop.create_future()
         run.pending[ask_id] = fut
         await _push(run, "ask_id", {"ask_id": ask_id, "question": question, "options": options,
-                                    "timeout_s": cfg.ask_timeout_s})
+                                    "timeout_s": cfg.ask_timeout_s, "agent": agent,
+                                    "kind": "approval" if str(question).startswith("Approve:") else "question"})
         try:
             return await fut
         finally:
@@ -310,9 +364,8 @@ async def _execute(run: Run, cfg: Config) -> None:
 
     try:
         llm = make_llm(cfg, mock=_mock())
-        browser = Browser(chromium_path=cfg.chromium_path, allowed_domains=cfg.allowed_domains,
-                          secrets=STATE.get_secrets())
-        await browser.start(headless=os.getenv("WEBFORGE_HEADED") != "1")
+        browser = await open_browser(cfg, STATE.get_secrets(), headless=os.getenv("WEBFORGE_HEADED") != "1")
+        ticker = asyncio.create_task(_metrics_ticker(run, cfg, llm))
         res = await run_task(run.req.task, llm=llm, browser=browser, cfg=cfg, on_event=on_event, on_ask=on_ask,
                              run_dir=Path(cfg.runs_dir) / run.id, resume=run.resume)
         run.result = _jsonable(dataclasses.asdict(res))
@@ -320,10 +373,15 @@ async def _execute(run: Run, cfg: Config) -> None:
     except asyncio.CancelledError:
         run.error = "cancelled"
         raise
+    except RuntimeError as e:
+        run.error = _scrub(str(e)[:500], cfg.api_key)
+        await _push(run, "error", {"message": run.error})
     except Exception as e:  # noqa: BLE001
         run.error = _scrub(f"{type(e).__name__}: {str(e)[:300]}", cfg.api_key)
         await _push(run, "error", {"message": run.error})
     finally:
+        if ticker is not None:
+            ticker.cancel()
         for closer in (getattr(browser, "close", None), getattr(llm, "aclose", None)):
             if closer:
                 try:
@@ -380,7 +438,9 @@ def _spend(cfg: Config) -> float:
 async def health() -> dict:
     cfg = get_cfg()
     _, key_source = resolve_key(cfg)
-    return {"ok": True, "mock": _mock(), "model": cfg.model, "provider": cfg.provider,
+    mode = ("your Chrome (remote debugging)" if cfg.cdp_url else "own Chromium (window)"
+            if os.getenv("WEBFORGE_HEADED") == "1" else "own Chromium (headless, live thumbnails)")
+    return {"ok": True, "mock": _mock(), "real_browser": bool(cfg.cdp_url), "browser_mode": mode, "model": cfg.model, "provider": cfg.provider,
             "has_key": key_source != "none", "key_source": key_source,
             "needs_key": _needs_key(cfg), "local_mode": _local_mode(),
             "spend_usd": _spend(cfg), "budget_usd": cfg.budget_usd, "browser": _browser_available(cfg),
@@ -538,6 +598,30 @@ async def run_answer(run_id: str, body: AnswerRequest, x_access_code: Optional[s
         raise HTTPException(404, "No open question with that id (it may have timed out).")
     fut.set_result((body.answer or "")[:2000])
     return {"ok": True}
+
+
+@app.post("/api/runs/{run_id}/answer_all")
+async def run_answer_all(run_id: str, body: AnswerAllRequest,
+                         x_access_code: Optional[str] = Header(default=None)) -> dict:
+    _require_code(x_access_code)
+    run = _get_run(run_id)
+    n = 0
+    for aid in body.ask_ids:
+        fut = run.pending.get(aid)
+        if fut is not None and not fut.done():
+            fut.set_result((body.answer or "")[:2000])
+            n += 1
+    return {"resolved": n}
+
+
+@app.get("/api/runs/{run_id}/log")
+async def run_log(run_id: str):
+    from fastapi.responses import FileResponse
+    f = _run_dir(run_id) / "log.jsonl"
+    if not f.is_file():
+        raise HTTPException(404, "No log for this run.")
+    return FileResponse(f, media_type="application/x-ndjson",
+                        headers={"Content-Disposition": f'attachment; filename="{run_id}.jsonl"'})
 
 
 @app.post("/api/runs/{run_id}/cancel")

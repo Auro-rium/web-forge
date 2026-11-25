@@ -133,3 +133,32 @@ async def test_screenshot_is_small_jpeg(br, base_url):
     await br.act("goto", url=base_url + "/forms/register.html")
     img = await br.screenshot()
     assert img and img[:2] == b"\xff\xd8" and len(img) < 120_000
+
+
+async def _register(br, base_url, name, email, ticket):
+    await br.act("goto", url=base_url + "/forms/register.html")
+    obs = await br.observe()
+    await br.act("fill_form", fields={"Full name": name, "Email": email, "Ticket type": ticket, "terms": True})
+    await br.act("click", idx=el(obs, "Submit registration").idx)
+    return await br.page_text()
+
+
+async def test_confirmation_codes_are_unique_per_student(br, base_url):
+    import re
+    codes = []
+    for name, email in [("Ada Lovelace", "ada@school.org"), ("Alan Turing", "alan@school.org"),
+                        ("Maya Rao", "maya@school.org")]:
+        text = await _register(br, base_url, name, email, "Student")
+        m = re.search(r"Confirmation code (WF-\d{4})", text)
+        assert m and f"Thanks, {name}" in text, text
+        codes.append(m.group(1))
+    assert len(set(codes)) == 3
+    again = await _register(br, base_url, "Ada Lovelace", "ada@school.org", "Student")
+    assert codes[0] in again          # deterministic: same student, same code
+
+
+async def test_domain_without_dot_is_rejected_with_a_visible_error(br, base_url):
+    text = await _register(br, base_url, "Maya Rao", "maya@school", "Student")
+    assert "Thanks" not in text
+    obs = await br.observe()
+    assert any("valid email" in e for e in obs.errors)

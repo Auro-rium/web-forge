@@ -123,7 +123,7 @@ OBSERVE_JS = r"""
     if (x.willValidate && x.dataset.wfTouched === '1' && !x.checkValidity() && x.validationMessage)
       errors.push((nameOf(x)[0] || x.name || 'field') + ': ' + x.validationMessage);
   });
-  return { url: location.href, title: document.title, elements, errors: [...new Set(errors)].slice(0, 12),
+  return { url: location.href, title: document.title.replace(/^\[(w\d+|agent|read)\] /, ''), elements, errors: [...new Set(errors)].slice(0, 12),
            text: norm(document.body ? document.body.innerText : '') };
 }
 """

@@ -29,7 +29,10 @@ document.getElementById('reg').addEventListener('submit', e => {
   f.hidden = true;
   const t = document.getElementById('thanks');
   const s = (f.querySelector('input[name=session]:checked') || {}).value || 'none';
-  t.textContent = `Thanks, ${f.name.value}! Registration confirmed: ${f.ticket.value} ticket, session ${s}. Confirmation code WF-4821.`;
+  const key = `${f.name.value.trim()}|${f.email.value.trim().toLowerCase()}|${f.ticket.value}`;
+  let h = 5381; for (const c of key) h = ((h * 33) ^ c.charCodeAt(0)) >>> 0;
+  const code = 'WF-' + (1000 + (h % 9000));      // deterministic per student, so parallel runs give distinct codes
+  t.textContent = `Thanks, ${f.name.value}! Registration confirmed: ${f.ticket.value} ticket, session ${s}. Confirmation code ${code}.`;
   t.hidden = false;
 });
 </script></main></body></html>
